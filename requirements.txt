@@ -1,0 +1,11 @@
+# 阶段一（免训练）
+numpy>=1.23
+opencv-python-headless>=4.7
+scikit-image>=0.21
+scipy>=1.10
+matplotlib>=3.7
+# 测试
+pytest>=7
+# 阶段二（可选，需 GPU）：
+# ultralytics>=8.1
+# sahi>=0.11
