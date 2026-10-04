@@ -69,3 +69,26 @@ def test_build_dataset_single_image(tmp_path):
         for line in f.read_text().splitlines():
             v = [float(t) for t in line.split()]
             assert v[0] == 0 and all(0 <= t <= 1 for t in v[1:])
+
+
+def test_build_dataset_with_mask(tmp_path):
+    import cv2
+
+    from stomata.dl import PointAnnotation, build_yolo_dataset
+
+    img = np.full((1280, 1280, 3), 200, np.uint8)
+    img[:, 640:] = 30                        # 右半边是"未标注区域"
+    p = tmp_path / "a.png"
+    cv2.imwrite(str(p), img)
+    mask = np.zeros((1280, 1280), np.uint8)
+    mask[:, :640] = 255
+    mp = tmp_path / "m.png"
+    cv2.imwrite(str(mp), mask)
+    pts = np.array([[100.0, 100.0], [300.0, 500.0], [900.0, 300.0]])   # 第三个点在掩膜外
+    out = tmp_path / "ds"
+    build_yolo_dataset([PointAnnotation(str(p), pts, None, str(mp))], str(out), keep_empty=1.0, overlap=0.0,
+                       min_valid_frac=0.3)
+    names = sorted(f.stem for f in (out / "labels/train").iterdir()) + sorted(f.stem for f in (out / "labels/val").iterdir())
+    assert all(int(n.split("_")[1]) < 640 for n in names)          # 全掩膜的右侧切片被丢弃
+    n_boxes = sum(len(f.read_text().splitlines()) for d in ("train", "val") for f in (out / "labels" / d).iterdir())
+    assert n_boxes == 2                                             # 掩膜外的点不生成框

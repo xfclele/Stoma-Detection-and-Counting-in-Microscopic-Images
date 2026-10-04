@@ -27,6 +27,7 @@ class PointAnnotation:
     image_path: str
     points: np.ndarray              # (N, 2) 气孔中心 x, y
     majors: Optional[np.ndarray]    # (N,) 长轴像素，可为 None
+    mask_path: Optional[str] = None  # 可选有效区域掩膜（255=已标注的有效区域；0=未标注/剔除区，训练时被遮蔽）
 
     @classmethod
     def from_json(cls, json_path: str, image_dir: str) -> "PointAnnotation":
@@ -35,7 +36,8 @@ class PointAnnotation:
             d = json.load(f)
         pts = np.asarray(d.get("points", []), float).reshape(-1, 2)
         majors = np.asarray(d["major_px"], float) if "major_px" in d else None
-        return cls(os.path.join(image_dir, d["image"]), pts, majors)
+        mask = os.path.join(os.path.dirname(json_path), "..", d["mask"]) if d.get("mask") else None
+        return cls(os.path.join(image_dir, d["image"]), pts, majors, mask)
 
 
 def points_to_boxes(points: np.ndarray, majors: Optional[np.ndarray] = None, default_major: Optional[float] = None,
@@ -91,12 +93,16 @@ def boxes_to_yolo_lines(boxes: np.ndarray, w: int, h: int, cls: int = 0) -> list
 
 def build_yolo_dataset(annotations: Sequence[PointAnnotation], out_dir: str, tile: int = 640, overlap: float = 0.2,
                        val_fraction: float = 0.2, min_visible: float = 0.6, keep_empty: float = 0.3,
-                       seed: int = 0, split_by: str = "image") -> str:
+                       seed: int = 0, split_by: str = "image", val_images: Optional[Sequence[str]] = None,
+                       min_valid_frac: float = 0.3) -> str:
     """把若干整图点标注转换为 Ultralytics YOLO 切片数据集，返回 data.yaml 路径。
 
     split_by="image"：按整图划分训练/验证（推荐；同一张图的重叠切片若分到两边会导致验证集信息泄漏）。
     当只有 1 张图时自动退化为按空间划分：最右一列切片作验证，与之重叠的训练切片丢弃。
     keep_empty：无目标切片的保留比例（适量负样本可压制叶脉/细胞壁误检）。
+    val_images：显式指定验证集图像文件名（覆盖 val_fraction 的随机划分）。
+    有掩膜时：掩膜外（未标注区域）的像素用切片有效区的中位灰度填充，避免"有气孔却没标签"被当作负样本；
+    有效面积 < min_valid_frac 的切片丢弃；中心落在掩膜外的框丢弃。
     """
     rng = random.Random(seed)
     for sub in ("images/train", "images/val", "labels/train", "labels/val"):
@@ -107,11 +113,23 @@ def build_yolo_dataset(annotations: Sequence[PointAnnotation], out_dir: str, til
     idx = list(range(len(anns)))
     rng.shuffle(idx)
     val_imgs = set(idx[:n_val_img])
+    if val_images is not None:
+        vs = set(val_images)
+        val_imgs = {i for i, a in enumerate(anns) if os.path.basename(a.image_path) in vs}
 
     for i, ann in enumerate(anns):
         img = cv2.imdecode(np.fromfile(ann.image_path, np.uint8), cv2.IMREAD_COLOR)
         H, W = img.shape[:2]
         boxes = points_to_boxes(ann.points, ann.majors)
+        mask = None
+        if ann.mask_path:
+            mask = cv2.imread(ann.mask_path, cv2.IMREAD_GRAYSCALE)
+            if mask is None or mask.shape != (H, W):
+                raise ValueError(f"掩膜缺失或尺寸不符: {ann.mask_path}")
+            if len(boxes):
+                cx = np.clip(ann.points[:, 0].astype(int), 0, W - 1)
+                cy = np.clip(ann.points[:, 1].astype(int), 0, H - 1)
+                boxes = boxes[mask[cy, cx] > 0]
         stem = os.path.splitext(os.path.basename(ann.image_path))[0]
         wins = list(iter_tiles(W, H, tile, overlap))
         # 单图：最右一列切片作验证，与其有重叠的训练切片丢弃（防止重叠像素泄漏）
@@ -129,11 +147,18 @@ def build_yolo_dataset(annotations: Sequence[PointAnnotation], out_dir: str, til
                 split = "train"
             else:
                 split = "val" if i in val_imgs else "train"
+            crop = img[y0:y1, x0:x1].copy()
+            if mask is not None:
+                m = mask[y0:y1, x0:x1] > 0
+                if m.mean() < min_valid_frac:
+                    continue
+                if not m.all():
+                    crop[~m] = np.median(crop[m], axis=0).astype(np.uint8)
             tb = clip_boxes_to_tile(boxes, win, min_visible)
             if len(tb) == 0 and rng.random() > keep_empty:
                 continue
             name = f"{stem}_{x0}_{y0}"
-            cv2.imwrite(os.path.join(out_dir, "images", split, name + ".png"), img[y0:y1, x0:x1])
+            cv2.imwrite(os.path.join(out_dir, "images", split, name + ".png"), crop)
             with open(os.path.join(out_dir, "labels", split, name + ".txt"), "w") as f:
                 f.write("\n".join(boxes_to_yolo_lines(tb, x1 - x0, y1 - y0)))
 
