@@ -1,4 +1,4 @@
-# stomata_yolov8n_p2_human — 人工标注微调模型（当前推荐）
+# stomata_yolov8n_p2_human — 人工标注微调模型（v1，已被 v2 取代）
 
 | 项目 | 内容 |
 |---|---|

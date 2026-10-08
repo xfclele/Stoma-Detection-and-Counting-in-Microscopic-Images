@@ -1,6 +1,7 @@
 # 训练报告：Stomata_Enhanced 人工标注数据
 
-最终模型：`models/stomata_yolov8n_p2_human/best.pt`（YOLOv8n-P2，6.3 MB）。推荐置信度阈值 **0.45**。
+**当前推荐模型：`models/stomata_yolov8n_p2_human_v2/best.pt`（YOLOv8n-P2，6.3 MB），置信度阈值 0.40**——见第 6 节（数据整理后的 v2 训练）。
+第 1–5 节记录的是数据补全前（128 张训练图）的 v1 模型 `models/stomata_yolov8n_p2_human/`。
 
 ## 1. 数据结构分析
 
@@ -43,6 +44,8 @@
 
 ![convergence](images/convergence_human.png)
 
+（图中第 4 段为第 6 节的 v2_b，使用补全后的数据集。）
+
 **收敛判断**：每段重新开启 mosaic 增强后指标先下降，关闭 mosaic 的最后几轮回升到同一水平（mAP50 ≈ 0.943–0.947）；训练损失仍在缓慢下降而验证指标持平。在当前模型规模和输入分辨率下已经收敛，继续加轮数不会带来实质提升。mAP50-95 在 ft3 略低，说明框的贴合度略差，但不影响中心点计数（见下）。
 
 ## 3. 测试结果（整图切片推理，人工标注真值）
@@ -81,13 +84,66 @@
 4. **有 GPU 时**换 YOLOv8s-P2 或提高输入分辨率（如 960 切片），针对 < 40 px 的小气孔与密集簇；在当前 CPU 环境中每轮约 10 分钟，更大的模型不现实。
 5. 失焦视野可考虑在预处理或增强中加入模糊/对比度扰动，并在报告中把"失焦区域"作为单独类别统计。
 
+## 6. 数据整理补全后（main 分支 2026-10-09）：v2
+
+### 新数据布局
+
+```
+pre-trainning/
+├── Stomata_Enhanced/            人工标注数据集
+│   ├── data.yaml
+│   ├── train/images  train/labels    234 对（全部配齐，统一为彩色增强版本）
+│   └── val/images    val/labels      59 对（未变）
+└── model_review_samples/        原外部自动计数流程的 20 张审阅图（images/ overlays/ auto_count_results.csv）
+```
+
+- 标签内容与之前完全相同；原先缺图像的 106 个标签现在都有图像。
+- 用 v1 模型检查新增的 106 张图：没有成片漏标的图。`108.1_1`（3 个框）和 `349.3`（右侧未标注）仍然剔除。
+- v2 训练集：232 张 → 2,784 个切片、71,525 个框（约为 v1 的 1.8 倍）。
+
+### 独立测试：v1 模型在 106 张新图上
+
+这 106 张图从未参与 v1 的训练或阈值选择，是真正的独立测试集。用事先确定的阈值 0.45：
+
+| 数据 | Precision | Recall | F1 | 计数 MAPE |
+|---|---|---|---|---|
+| 验证集 57 张（阈值在此选定） | 0.935 | 0.944 | 0.939 | 6.8% |
+| **新增 106 张（独立）** | **0.934** | **0.944** | **0.939** | **7.3%** |
+
+两者几乎一致：验证集上的数字没有因为"在验证集上选阈值"而明显偏乐观，新上传标注的口径也与原有标注一致。
+
+### v2 训练
+
+| 段 | 起点 | 设置 | 末轮 val mAP50 / mAP50-95 | 整图 F1（最优阈值） |
+|---|---|---|---|---|
+| v2_a | v1 | lr0 0.002，mosaic 开（最后 1 轮关） | 0.944 / 0.507 | 0.9345（阈值 0.35） |
+| **v2_b** | v1 | lr0 0.0005，mosaic 关 | **0.950** / 0.508 | **0.9410**（阈值 0.40） |
+
+v2_a 反而比 v1 差（逐图 F1 劣于 v1 的有 45/57 张，p < 0.001）：对已收敛模型用较大学习率重启、轮数又少，被扰动后来不及恢复。
+v2_b 用小学习率、关闭 mosaic 从 v1 继续，逐图 F1 优于 v1 的有 39/57 张（Wilcoxon p = 0.011）；逐图计数误差 6.8% → 6.6%（p = 0.20，不显著）。
+
+### v2 最终结果（57 张验证图，阈值 0.40）
+
+| 模型 | Precision | Recall | F1 | 计数 MAE | 计数 MAPE | 计数偏差 |
+|---|---|---|---|---|---|---|
+| v1（阈值 0.45） | 0.935 | 0.944 | 0.939 | 19.0 | 6.8% | +3.1 |
+| **v2（阈值 0.40）** | **0.937** | **0.945** | **0.941** | **18.5** | **6.6%** | **+2.7** |
+
+注意：106 张新图已用于 v2 训练，v2 目前**没有**独立测试集，以上数字仍是在验证集上选阈值的结果。
+
+### 结论
+
+- 数据量翻倍只带来很小的提升（F1 +0.2 个百分点）；YOLOv8n-P2 在这类数据上的上限大约是 F1 0.94、计数误差 6–7%。
+- 误差模式与 v1 相同：< 40 px 的小气孔召回约 0.70，≥ 5 个邻居的密集簇约 0.86，失焦/低对比视野整体漏检（`292.1`、`23.2_1`、`16.1`、`43.3`）。
+- 进一步提升需要：更大的模型或更高输入分辨率（需要 GPU）；针对失焦视野的增强；补全 `108.1_1`、`349.3`、`221.2` 的标注；以及一组新的、未参与训练的独立测试图。
+
 ## 复现
 
 ```bash
-python scripts/prepare_human_dataset.py -o datasets/stomata_human          # 数据配对、切片、清单
-python scripts/eval_human.py --weights models/stomata_yolov8n_p2_human/best.pt \
+python scripts/prepare_human_dataset.py -o datasets/stomata_human_v2       # 数据配对、切片、清单
+python scripts/eval_human.py --weights models/stomata_yolov8n_p2_human_v2/best.pt \
        -o outputs/eval_human/final --exclude 118.2 221.2                  # 评估 + 阈值扫描
-python scripts/error_analysis.py outputs/eval_human/final --conf 0.45     # 误差分析
+python scripts/error_analysis.py outputs/eval_human/final --conf 0.40     # 误差分析
 python scripts/plot_convergence.py runs/stomata/human_ft1/results.csv runs/stomata/human_ft2/results.csv \
-       runs/stomata/human_ft3_clean/results.csv -o docs/images/convergence_human.png
+       runs/stomata/human_ft3_clean/results.csv runs/stomata/human_v2_b/results.csv -o docs/images/convergence_human.png
 ```
