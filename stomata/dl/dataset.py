@@ -28,6 +28,7 @@ class PointAnnotation:
     points: np.ndarray              # (N, 2) 气孔中心 x, y
     majors: Optional[np.ndarray]    # (N,) 长轴像素，可为 None
     mask_path: Optional[str] = None  # 可选有效区域掩膜（255=已标注的有效区域；0=未标注/剔除区，训练时被遮蔽）
+    boxes: Optional[np.ndarray] = None  # 可选 (N,4) 像素框 x0,y0,x1,y1（人工框标注）；给出时优先于由点生成的正方形框
 
     @classmethod
     def from_json(cls, json_path: str, image_dir: str) -> "PointAnnotation":
@@ -120,7 +121,7 @@ def build_yolo_dataset(annotations: Sequence[PointAnnotation], out_dir: str, til
     for i, ann in enumerate(anns):
         img = cv2.imdecode(np.fromfile(ann.image_path, np.uint8), cv2.IMREAD_COLOR)
         H, W = img.shape[:2]
-        boxes = points_to_boxes(ann.points, ann.majors)
+        boxes = ann.boxes.astype(float).copy() if ann.boxes is not None else points_to_boxes(ann.points, ann.majors)
         mask = None
         if ann.mask_path:
             mask = cv2.imread(ann.mask_path, cv2.IMREAD_GRAYSCALE)
@@ -166,6 +167,27 @@ def build_yolo_dataset(annotations: Sequence[PointAnnotation], out_dir: str, til
     with open(yaml_path, "w", encoding="utf-8") as f:
         f.write(f"path: {os.path.abspath(out_dir)}\ntrain: images/train\nval: images/val\nnames:\n  0: stoma\n")
     return yaml_path
+
+
+def load_yolo_polygon_labels(label_path: str, image_path: str, width: int, height: int) -> PointAnnotation:
+    """读取 YOLO 标签：支持 `cls cx cy w h` 与 4 角点多边形 `cls x1 y1 ... x4 y4`（均为归一化坐标）。
+    多边形取外接矩形；返回带像素框与中心点的 PointAnnotation。"""
+    rows = []
+    with open(label_path, "r", encoding="utf-8") as f:
+        for line in f:
+            v = line.split()
+            if len(v) == 5:
+                cx, cy, w, h = map(float, v[1:])
+                rows.append([cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2])
+            elif len(v) >= 7 and (len(v) - 1) % 2 == 0:
+                c = np.array(v[1:], float)
+                xs, ys = c[0::2], c[1::2]
+                rows.append([xs.min(), ys.min(), xs.max(), ys.max()])
+    b = np.array(rows, float).reshape(-1, 4) * [width, height, width, height]
+    b = b[(b[:, 2] > b[:, 0]) & (b[:, 3] > b[:, 1])]          # 丢弃退化框
+    pts = np.stack([(b[:, 0] + b[:, 2]) / 2, (b[:, 1] + b[:, 3]) / 2], 1)
+    majors = np.maximum(b[:, 2] - b[:, 0], b[:, 3] - b[:, 1])
+    return PointAnnotation(image_path, pts, majors, None, b)
 
 
 def load_point_annotations(json_paths: Iterable[str], image_dir: str) -> list[PointAnnotation]:

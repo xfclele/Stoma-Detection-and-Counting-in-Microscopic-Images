@@ -6,3 +6,4 @@ outputs_dl/
 runs/
 datasets/
 *.egg-info/
+*.log

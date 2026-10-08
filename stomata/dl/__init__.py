@@ -4,11 +4,11 @@
 训练与官方 SAHI 推理需额外安装：pip install ultralytics sahi
 """
 from .dataset import (PointAnnotation, boxes_to_yolo_lines, build_yolo_dataset, clip_boxes_to_tile, iter_tiles,
-                      load_point_annotations, points_to_boxes)
+                      load_point_annotations, load_yolo_polygon_labels, points_to_boxes)
 from .sliced_inference import BoxDetection, SlicedPredictor, greedy_nms_ios, ios_matrix
 
 __all__ = [
     "PointAnnotation", "boxes_to_yolo_lines", "build_yolo_dataset", "clip_boxes_to_tile", "iter_tiles",
-    "load_point_annotations", "points_to_boxes",
+    "load_point_annotations", "load_yolo_polygon_labels", "points_to_boxes",
     "BoxDetection", "SlicedPredictor", "greedy_nms_ios", "ios_matrix",
 ]
