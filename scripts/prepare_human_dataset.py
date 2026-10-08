@@ -47,9 +47,13 @@ def main():
     ap.add_argument("-o", "--out", default="datasets/stomata_human")
     ap.add_argument("--tile", type=int, default=640)
     ap.add_argument("--train-overlap", type=float, default=0.0, help="2560×1920 恰好切成 4×3 个 640 块")
+    ap.add_argument("--exclude", nargs="*", default=["108.1_1", "349.3"],
+                    help="排除标注明显不完整的训练图（108.1_1 只有 3 个框；349.3 右侧整片未标注）")
     a = ap.parse_args()
 
     tr, tr_missing = find_pairs(os.path.join(a.root, "train/labels"), [os.path.join(a.root, "train"), a.extra_images])
+    tr_excluded = [stem(i) for i, _ in tr if stem(i) in set(a.exclude)]
+    tr = [(i, l) for i, l in tr if stem(i) not in set(a.exclude)]
     va, va_missing = find_pairs(os.path.join(a.root, "val/labels"), [os.path.join(a.root, "val/images")])
 
     def load(pairs):
@@ -68,6 +72,7 @@ def main():
         "val": [{"image": i, "label": l} for i, l in va],
         "train_labels_without_image": tr_missing,
         "val_labels_without_image": va_missing,
+        "train_excluded_incomplete_labels": tr_excluded,
         "counts": {"train_images": len(tr), "train_boxes": int(sum(len(x.points) for x in tr_anns)),
                    "val_images": len(va), "val_boxes": int(sum(len(x.points) for x in va_anns))},
     }
