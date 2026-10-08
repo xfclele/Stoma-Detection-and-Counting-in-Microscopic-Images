@@ -26,8 +26,8 @@ from stomata.evaluation import match_points, precision_recall_f1  # noqa: E402
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--weights", required=True)
-    ap.add_argument("--images", nargs="+", required=True, help="pre-trainning/images 下的文件名")
-    ap.add_argument("--src", default="data/samples/pre-trainning/images")
+    ap.add_argument("--images", nargs="+", required=True, help="model_review_samples/images 下的文件名")
+    ap.add_argument("--src", default="data/samples/pre-trainning/model_review_samples/images")
     ap.add_argument("--labels", default="data/pretraining_labels")
     ap.add_argument("--conf", type=float, default=0.25)
     ap.add_argument("--tol-factor", type=float, default=0.35, help="匹配容差 = factor × 该图长轴中位数")

@@ -1,11 +1,10 @@
 #!/usr/bin/env python
 """Stomata_Enhanced（人工标注）→ 切片 YOLO 数据集 + 数据清单。
 
-数据现状（见 docs/TRAINING_REPORT.md）：
-    Stomata_Enhanced/train/labels/*.txt   234 个标签；对应图像散落在
-        Stomata_Enhanced/train/*.jpg（6 张）与 pre-trainning/images/*.jpg（122 张）
-        —— 其余 106 个标签暂无图像，跳过并记入清单
-    Stomata_Enhanced/val/images + labels  59 对，完整
+数据布局（main 分支 2026-10-09 整理后）：
+    Stomata_Enhanced/train/images + labels  234 对（缺图像的标签会被跳过并记入清单）
+    Stomata_Enhanced/val/images + labels    59 对
+旧布局（图像散落在 train/ 根目录或 pre-trainning/images/）仍兼容：用 --extra-images 指定。
 标签格式：每行 `0 x1 y1 x2 y1 x2 y2 x1 y2`（归一化 4 角点，轴对齐矩形），也兼容 `0 cx cy w h`。
 
     python scripts/prepare_human_dataset.py -o datasets/stomata_human
@@ -43,7 +42,7 @@ def find_pairs(label_dir, image_dirs):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", default="data/samples/pre-trainning/Stomata_Enhanced")
-    ap.add_argument("--extra-images", default="data/samples/pre-trainning/images")
+    ap.add_argument("--extra-images", nargs="*", default=[], help="额外的图像搜索目录（兼容旧布局）")
     ap.add_argument("-o", "--out", default="datasets/stomata_human")
     ap.add_argument("--tile", type=int, default=640)
     ap.add_argument("--train-overlap", type=float, default=0.0, help="2560×1920 恰好切成 4×3 个 640 块")
@@ -51,7 +50,7 @@ def main():
                     help="排除标注明显不完整的训练图（108.1_1 只有 3 个框；349.3 右侧整片未标注）")
     a = ap.parse_args()
 
-    tr, tr_missing = find_pairs(os.path.join(a.root, "train/labels"), [os.path.join(a.root, "train"), a.extra_images])
+    tr, tr_missing = find_pairs(os.path.join(a.root, "train/labels"), [os.path.join(a.root, "train/images"), os.path.join(a.root, "train"), *a.extra_images])
     tr_excluded = [stem(i) for i, _ in tr if stem(i) in set(a.exclude)]
     tr = [(i, l) for i, l in tr if stem(i) not in set(a.exclude)]
     va, va_missing = find_pairs(os.path.join(a.root, "val/labels"), [os.path.join(a.root, "val/images")])

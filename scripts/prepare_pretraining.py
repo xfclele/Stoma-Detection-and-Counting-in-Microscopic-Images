@@ -71,7 +71,7 @@ def estimate_major(img: np.ndarray, points: np.ndarray, guess: float) -> np.ndar
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("src", nargs="?", default="data/samples/pre-trainning")
+    ap.add_argument("src", nargs="?", default="data/samples/pre-trainning/model_review_samples")
     ap.add_argument("-o", "--out", default="data/pretraining_labels")
     ap.add_argument("--major-guess", type=float, default=50.0, help="长轴初值（像素），用于射线测量的搜索半径")
     a = ap.parse_args()
