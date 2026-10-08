@@ -143,6 +143,15 @@ CLI 的默认容差为 0.35 × 期望长轴。
 
 ---
 
+## 已训练模型
+
+| 权重 | 训练数据 | 验证集（人工标注，57 张整图） |
+|---|---|---|
+| `models/stomata_yolov8n_p2_human/best.pt`（**推荐**，conf 0.45） | Stomata_Enhanced 人工标注 126 张 | P 0.935 / R 0.944 / F1 0.939，计数误差 6.8% |
+| `models/stomata_yolov8n_p2/best.pt` | 外部自动计数流程的伪标签 16 张 | P 0.921 / R 0.900 / F1 0.911，计数误差 8.9% |
+
+数据结构、标注问题、收敛曲线与误差分析见 [`docs/TRAINING_REPORT.md`](docs/TRAINING_REPORT.md)。
+
 ## 阶段二：生产级深度学习方案
 
 详见 [`docs/DEEP_LEARNING.md`](docs/DEEP_LEARNING.md) 与 [`docs/ANNOTATION_GUIDE.md`](docs/ANNOTATION_GUIDE.md)。概要：
