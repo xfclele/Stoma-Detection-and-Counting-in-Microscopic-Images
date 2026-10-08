@@ -1,0 +1,6 @@
+path: /powerplant/input/projects/AppleStomataDensity/Stomata Density/Stomata_Enhanced
+train: train/images
+val: val/images
+
+nc: 1
+names: ['stomata']
