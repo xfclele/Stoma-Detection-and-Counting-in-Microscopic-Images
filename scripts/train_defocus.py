@@ -36,6 +36,7 @@ def main():
     ap.add_argument("--p", type=float, default=0.5, help="每张训练切片施加离焦的概率")
     ap.add_argument("--radius", type=float, nargs=2, default=(1.0, 3.5), help="圆盘 PSF 半径范围（原分辨率像素）")
     ap.add_argument("--local-p", type=float, default=0.7, help="局部（而非整片）失焦的比例")
+    ap.add_argument("--contrast-p", type=float, default=0.5, help="模糊区域同时降低对比度的概率")
     a = ap.parse_args()
 
     base = yaml.safe_load(open(a.base_args))
@@ -43,7 +44,7 @@ def main():
     args.update(data=a.data, epochs=a.epochs, time=a.time, lr0=a.lr0, project="runs/stomata", name=a.name,
                 device="cpu", exist_ok=True, plots=False, amp=False)
 
-    install_defocus_augment(p=a.p, radius=tuple(a.radius), local_p=a.local_p)
+    install_defocus_augment(p=a.p, radius=tuple(a.radius), local_p=a.local_p, contrast_p=a.contrast_p)
     from ultralytics import YOLO
 
     YOLO(a.weights).train(**args)
