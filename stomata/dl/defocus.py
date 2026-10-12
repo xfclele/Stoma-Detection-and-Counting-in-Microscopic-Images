@@ -15,6 +15,24 @@
     from stomata.dl.defocus import install_defocus_augment
     install_defocus_augment(p=0.5)
     YOLO(...).train(...)
+
+English
+-------
+Defocus blur augmentation: simulates fields outside the microscope's focal plane (whole or partial).
+
+The stratified diagnosis (docs/error_stratify_v2*.md) showed that within the same size bin, and even
+within the same image, the blurriest quarter of stomata has 5–9 percentage points lower recall,
+independently of contrast. The augmentation therefore covers both cases:
+
+* local defocus (70% by default): a smooth random field blends sharp and blurred images, mimicking
+  partial defocus from an uneven leaf surface;
+* whole-tile defocus (30%): the whole tile is blurred.
+
+The PSF is a disk kernel (geometric-optics defocus) by default, mixed with Gaussian kernels. Blurred
+regions may also lose contrast and get a little sensor noise, because real defocused images are not
+"clean" blur. Only pixels change, not boxes: a defocused stoma is still a stoma.
+
+Usage (call before ultralytics forks the dataloader workers): see the example above.
 """
 from __future__ import annotations
 
@@ -23,7 +41,8 @@ import numpy as np
 
 
 def disk_kernel(radius: float) -> np.ndarray:
-    """半径 radius（像素，可为小数）的归一化圆盘核，边缘做抗锯齿。"""
+    """半径 radius（像素，可为小数）的归一化圆盘核，边缘做抗锯齿。
+    Normalised disk kernel of the given radius (px, may be fractional), anti-aliased at the edge."""
     r = max(float(radius), 0.5)
     n = int(np.ceil(r)) * 2 + 1
     yy, xx = np.mgrid[:n, :n] - n // 2
@@ -38,7 +57,8 @@ def defocus_blur(img: np.ndarray, radius: float, kind: str = "disk") -> np.ndarr
 
 
 def smooth_mask(h: int, w: int, rng: np.random.Generator, coverage: float) -> np.ndarray:
-    """平滑随机场：低分辨率噪声上采样，再按 coverage 分位数做软阈值，得到 0–1 掩膜。"""
+    """平滑随机场：低分辨率噪声上采样，再按 coverage 分位数做软阈值，得到 0–1 掩膜。
+    Smooth random field: upsampled low-resolution noise, soft-thresholded at the coverage quantile into a 0–1 mask."""
     gh, gw = rng.integers(2, 6), rng.integers(2, 6)
     field = cv2.resize(rng.random((gh, gw)).astype(np.float32), (w, h), interpolation=cv2.INTER_CUBIC)
     field = cv2.GaussianBlur(field, (0, 0), max(h, w) / 16)
@@ -49,7 +69,8 @@ def smooth_mask(h: int, w: int, rng: np.random.Generator, coverage: float) -> np
 
 def apply_defocus(img: np.ndarray, rng: np.random.Generator, radius=(1.5, 5.0), local_p: float = 0.7,
                   contrast=(0.7, 1.0), contrast_p: float = 0.5, noise=(0.0, 3.0)) -> np.ndarray:
-    """对一张 uint8 BGR 图像施加离焦退化。"""
+    """对一张 uint8 BGR 图像施加离焦退化。
+    Apply defocus degradation to a uint8 BGR image."""
     h, w = img.shape[:2]
     f = img.astype(np.float32)
     r = float(rng.uniform(*radius))
@@ -67,7 +88,8 @@ def apply_defocus(img: np.ndarray, rng: np.random.Generator, radius=(1.5, 5.0), 
 
 
 class DefocusAugment:
-    """ultralytics 训练变换：以概率 p 对 labels["img"] 施加离焦，标签不变。"""
+    """ultralytics 训练变换：以概率 p 对 labels["img"] 施加离焦，标签不变。
+    Ultralytics training transform: defocus labels["img"] with probability p; labels unchanged."""
 
     def __init__(self, p: float = 0.5, **kw):
         self.p, self.kw = p, kw
@@ -81,7 +103,9 @@ class DefocusAugment:
 
 def install_defocus_augment(p: float = 0.5, **kw) -> None:
     """给 YOLODataset.build_transforms 打补丁：训练集（augment=True）在 Format 之前插入 DefocusAugment。
-    验证集不受影响。必须在构建 dataloader 之前调用。"""
+    验证集不受影响。必须在构建 dataloader 之前调用。
+    Patch YOLODataset.build_transforms to insert DefocusAugment before Format for training sets
+    (augment=True); validation is unaffected. Must be called before the dataloader is built."""
     from ultralytics.data.dataset import YOLODataset
 
     if getattr(YOLODataset, "_defocus_installed", False):

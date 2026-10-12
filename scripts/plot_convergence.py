@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 """把若干依次衔接的训练段 (results.csv) 拼成连续的收敛曲线。
+Join consecutive training segments (results.csv) into one continuous convergence plot.
 
     python scripts/plot_convergence.py runs/stomata/human_ft1/results.csv runs/stomata/human_ft2/results.csv \
         -o docs/images/convergence_human.png
@@ -14,7 +15,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
-BLUE, ORANGE = "#2a78d6", "#eb6834"          # 参考调色板 categorical slot 1/2
+BLUE, ORANGE = "#2a78d6", "#eb6834"          # 参考调色板 categorical slot 1/2 / reference palette categorical slot 1/2
 INK, INK2, GRID, SURF = "#0b0b0b", "#52514e", "#e6e5e1", "#fcfcfb"
 
 

@@ -1,13 +1,21 @@
 #!/usr/bin/env python
 """在 Stomata_Enhanced 人工标注验证集上做整图切片推理评估，并保存全部预测供误差分析。
+Whole-image sliced-inference evaluation on the Stomata_Enhanced human-labelled validation set; all
+predictions are saved for error analysis.
 
     python scripts/eval_human.py --weights models/xxx/best.pt -o outputs/eval_xxx [--exclude 118.2]
 
-输出：
+输出 / Outputs:
     per_image.csv   每图：真值数、预测数、TP/FP/FN、P/R/F1、计数误差
+                    per image: GT count, prediction count, TP/FP/FN, P/R/F1, count error
     preds.npz       每图预测框 (x0,y0,x1,y1,conf)，可离线改阈值重算（--from-npz）
+                    per-image boxes (x0,y0,x1,y1,conf), re-scorable offline at other thresholds (--from-npz)
     summary.json    总体指标 + 置信度阈值扫描 + 计数误差统计
+                    overall metrics + confidence sweep + count-error statistics
+    timing.json     每图推理耗时 / per-image inference time
 匹配：中心点一对一匈牙利匹配，容差 = tol_factor × 该真值框长边（默认 0.5，约 25 px）。
+Matching: one-to-one Hungarian matching of centres; tolerance = tol_factor × the GT box long side
+(default 0.5, about 25 px).
 """
 from __future__ import annotations
 
@@ -63,16 +71,16 @@ def main():
     ap.add_argument("--weights")
     ap.add_argument("--root", default="data/samples/pre-trainning/Stomata_Enhanced/val")
     ap.add_argument("-o", "--out", required=True)
-    ap.add_argument("--exclude", nargs="*", default=[], help="排除的图像（例如在该模型训练集中出现过的）")
+    ap.add_argument("--exclude", nargs="*", default=[], help="排除的图像（例如在该模型训练集中出现过的） / images to exclude (e.g. ones seen in this model's training set)")
     ap.add_argument("--tol-factor", type=float, default=0.5)
-    ap.add_argument("--conf", type=float, default=0.25, help="报告用阈值；扫描另见 summary.json")
-    ap.add_argument("--from-npz", action="store_true", help="复用已保存的 preds.npz，不重新推理")
+    ap.add_argument("--conf", type=float, default=0.25, help="报告用阈值；扫描另见 summary.json / threshold for the report; see summary.json for the sweep")
+    ap.add_argument("--from-npz", action="store_true", help="复用已保存的 preds.npz，不重新推理 / reuse saved preds.npz instead of running inference")
     ap.add_argument("--backend", choices=["sliced", "sahi"], default="sliced",
-                    help="sliced = 本仓库 SlicedPredictor（中心归属去重）；sahi = 官方 SAHI get_sliced_prediction")
-    ap.add_argument("--sahi-postprocess", default="GREEDYNMM", help="SAHI 合并方式：GREEDYNMM / NMM / NMS")
-    ap.add_argument("--sahi-metric", default="IOS", help="SAHI 匹配度量：IOS / IOU")
-    ap.add_argument("--sahi-thr", type=float, default=0.5, help="SAHI 匹配阈值")
-    ap.add_argument("--infer-conf", type=float, default=0.05, help="推理时的最低置信度（之后再做阈值扫描）")
+                    help="sliced = 本仓库 SlicedPredictor（中心归属去重）；sahi = 官方 SAHI get_sliced_prediction / sliced = this repo's SlicedPredictor (centre ownership); sahi = official SAHI get_sliced_prediction")
+    ap.add_argument("--sahi-postprocess", default="GREEDYNMM", help="SAHI 合并方式：GREEDYNMM / NMM / NMS / SAHI merge type: GREEDYNMM / NMM / NMS")
+    ap.add_argument("--sahi-metric", default="IOS", help="SAHI 匹配度量：IOS / IOU / SAHI match metric: IOS / IOU")
+    ap.add_argument("--sahi-thr", type=float, default=0.5, help="SAHI 匹配阈值 / SAHI match threshold")
+    ap.add_argument("--infer-conf", type=float, default=0.05, help="推理时的最低置信度（之后再做阈值扫描） / minimum confidence at inference (thresholds are swept afterwards)")
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
     gt = {k: v for k, v in load_gt(a.root).items() if k not in set(a.exclude)}
@@ -98,7 +106,7 @@ def main():
             times.append(time.perf_counter() - t0)
             preds[s] = np.array([[x.x0, x.y0, x.x1, x.y1, x.score] for x in d], np.float32).reshape(-1, 5)
             print(f"[{i + 1}/{len(gt)}] {s}: {len(preds[s])} dets  {times[-1]:.1f}s", flush=True)
-        t = np.array(times[1:] if len(times) > 1 else times)          # 第一张含模型预热，不计
+        t = np.array(times[1:] if len(times) > 1 else times)          # 第一张含模型预热，不计 / the first image includes model warm-up and is excluded
         timing = dict(backend=a.backend, n=len(t), mean_s=round(float(t.mean()), 3),
                       median_s=round(float(np.median(t)), 3), total_s=round(float(np.sum(times)), 1))
         json.dump(timing, open(os.path.join(a.out, "timing.json"), "w"), indent=1)

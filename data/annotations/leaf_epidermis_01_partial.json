@@ -1,6 +1,7 @@
 {
  "image": "leaf_epidermis_01.jpg",
  "note": "人工目视核验的 4 个局部矩形区域（非全图标注），仅用于参数标定与回归测试。points = 气孔中心 (x, y)；ignore = 严重失焦 / 被区域边界截断 / 专家难以判定的目标（其附近的预测不计 TP 也不计 FP）。区域 D 与 E 含粗叶脉与大片空白，是误检的主要来源。",
+ "note_en": "4 manually verified local rectangular regions (not a whole-image annotation), used only for parameter calibration and regression tests. points = stoma centres (x, y); ignore = objects that are badly defocused / cut by the region border / hard even for experts (predictions near them count as neither TP nor FP). Regions D and E contain thick veins and large blank areas, the main source of false positives.",
  "regions": [
   {
    "name": "A_dense",

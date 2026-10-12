@@ -1,4 +1,5 @@
-"""StomataCounter：批量读取、计数、坐标提取、统计与 CSV 导出。"""
+"""StomataCounter：批量读取、计数、坐标提取、统计与 CSV 导出。
+StomataCounter: batch loading, counting, coordinate extraction, statistics and CSV export."""
 from __future__ import annotations
 
 import csv
@@ -66,12 +67,13 @@ class ImageReport:
 
 class StomataCounter:
     """批量气孔计数器。
+    Batch stomata counter.
 
-    示例::
+    示例 / Example::
 
         counter = StomataCounter(DetectorConfig(expected_major_px=34, um_per_px=0.5))
-        reports = counter.run("data/samples")            # 目录 / 通配符 / 文件列表
-        counter.export_csv(reports, "outputs/stomata.csv")  # 逐气孔明细 + *_summary.csv 汇总
+        reports = counter.run("data/samples")            # 目录 / 通配符 / 文件列表 / directory / glob / file list
+        counter.export_csv(reports, "outputs/stomata.csv")  # 逐气孔明细 + *_summary.csv 汇总 / per-stoma detail + *_summary.csv summary
     """
 
     def __init__(self, config: Optional[DetectorConfig] = None, template: Optional[StomaTemplate] = None,
@@ -79,6 +81,9 @@ class StomataCounter:
         """
         share_template=True：用第一张图自举的模板处理整批图像（同一批次拍摄条件一致时更快、更一致）；
         False（默认）：每张图单独自举，适应不同放大倍率/染色。
+        share_template=True: process the whole batch with the template bootstrapped on the first image
+        (faster and more consistent when imaging conditions are identical); False (default): bootstrap
+        on each image, adapting to different magnifications / stains.
         """
         self.cfg = config or DetectorConfig()
         self.template = template
@@ -100,11 +105,11 @@ class StomataCounter:
 
     @staticmethod
     def read_image(path: str) -> np.ndarray:
-        # imdecode 兼容中文路径；IMREAD_UNCHANGED 保留 16-bit 显微图像的动态范围
+        # imdecode 兼容中文路径；IMREAD_UNCHANGED 保留 16-bit 显微图像的动态范围 / imdecode handles non-ASCII paths; IMREAD_UNCHANGED keeps the dynamic range of 16-bit micrographs
         data = np.fromfile(path, dtype=np.uint8)
         img = cv2.imdecode(data, cv2.IMREAD_UNCHANGED)
         if img is None:
-            raise IOError(f"无法读取图像: {path}")
+            raise IOError(f"无法读取图像 / cannot read image: {path}")
         return img
 
     # ------------------------------------------------------------------ run
@@ -122,13 +127,14 @@ class StomataCounter:
             rep = self.process(self.read_image(path), os.path.basename(path))
             reports.append(rep)
             if verbose:
-                print(f"[StomataCounter] {rep.image}: {rep.count} 个气孔")
+                print(f"[StomataCounter] {rep.image}: {rep.count} 个气孔 / stomata")
         return reports
 
     # --------------------------------------------------------------- export
     @staticmethod
     def export_csv(reports: list[ImageReport], csv_path: str) -> tuple[str, str]:
-        """写出两份 CSV：逐气孔明细 (csv_path) 与逐图像汇总 (*_summary.csv)。UTF-8 BOM 便于 Excel 打开。"""
+        """写出两份 CSV：逐气孔明细 (csv_path) 与逐图像汇总 (*_summary.csv)。UTF-8 BOM 便于 Excel 打开。
+        Write two CSVs: per-stoma detail (csv_path) and per-image summary (*_summary.csv); UTF-8 BOM for Excel."""
         os.makedirs(os.path.dirname(os.path.abspath(csv_path)), exist_ok=True)
         with open(csv_path, "w", newline="", encoding="utf-8-sig") as f:
             w = csv.DictWriter(f, fieldnames=DETAIL_FIELDS)
@@ -146,7 +152,9 @@ class StomataCounter:
 
     @staticmethod
     def export_points_json(report: ImageReport, path: str) -> None:
-        """导出点标注 JSON（与 evaluation.load_annotations 格式兼容），可作为人工校正/深度学习的预标注。"""
+        """导出点标注 JSON（与 evaluation.load_annotations 格式兼容），可作为人工校正/深度学习的预标注。
+        Export point annotations as JSON (compatible with evaluation.load_annotations), usable as pre-labels
+        for manual correction or deep learning."""
         with open(path, "w", encoding="utf-8") as f:
             json.dump({"image": report.image,
                        "points": [[round(d.x, 1), round(d.y, 1)] for d in report.result.detections],

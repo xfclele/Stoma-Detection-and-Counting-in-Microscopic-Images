@@ -39,7 +39,7 @@ def test_major_axis_estimate(synth, result):
 def test_no_detections_on_veins(synth, result):
     img, _, _ = synth
     h, w = img.shape
-    # 叶脉条纹位于右下三角区，远离所有气孔
+    # 叶脉条纹位于右下三角区，远离所有气孔 / vein stripes are in the lower-right triangle, away from all stomata
     in_vein = [d for d in result.detections if d.x > w * 0.75 and d.y > h * 0.8]
     assert len(in_vein) == 0
 
@@ -51,14 +51,14 @@ def test_tiled_response_equals_full(synth):
     det_tiled = ClassicalStomataDetector(DetectorConfig(expected_major_px=35, tile_size=200, tile_overlap=96),
                                          template=r1.template)
     r2 = det_tiled.detect(img)
-    # 分块拼接响应图与整图计算一致 ⇒ 计数一致（边界目标无重复）
+    # 分块拼接响应图与整图计算一致 ⇒ 计数一致（边界目标无重复） / tiled-and-stitched response equals the whole-image one ⇒ same count (no border duplicates)
     assert np.allclose(r1.response, r2.response, atol=1e-4)
     assert r1.count == r2.count
 
 
 def test_margin_exclusion(synth):
     img, _, _ = synth
-    crop = img[:, 100:420]            # 裁剪后左右边界会截断部分气孔
+    crop = img[:, 100:420]            # 裁剪后左右边界会截断部分气孔 / cropping cuts some stomata at the left and right borders
     on = ClassicalStomataDetector(DetectorConfig(expected_major_px=35, bootstrap_seeds=12)).detect(crop)
     off = ClassicalStomataDetector(DetectorConfig(expected_major_px=35, bootstrap_seeds=12, margin_exclusion=False),
                                    template=on.template).detect(crop)

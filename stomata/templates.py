@@ -1,21 +1,37 @@
 """气孔模板：合成先验模板 + 自举 (self-bootstrapping) 数据模板 + 旋转/尺度模板库。
+Stoma templates: synthetic prior template + self-bootstrapped data template + rotation/scale bank.
 
 为什么用模板匹配而不是单纯阈值/形态学？
-------------------------------------------------
+Why template matching rather than plain thresholding / morphology?
+------------------------------------------------------------------
 气孔的判别信息在于 *结构*：一个闭合椭圆暗环 + 内部一对亮的肾形保卫细胞 + 中央暗裂隙。
 细胞壁同样是暗线、叶脉同样是暗区，仅凭灰度或形态学无法区分；而归一化互相关 (NCC)
+What identifies a stoma is its *structure*: a closed dark elliptical ring + a pair of bright
+kidney-shaped guard cells + a dark central slit. Cell walls are also dark lines and veins are also
+dark regions, so grey level or morphology alone cannot separate them; normalised cross-correlation
 
     NCC(x) = Σ (I - Ī)(T - T̄) / (‖I - Ī‖ · ‖T - T̄‖)
 
 对局部亮度/对比度（残余光照不均）天然不变，只对 "结构形状" 敏感。
+is inherently invariant to local brightness/contrast (residual uneven illumination) and responds
+only to structural shape.
 
-自举流程（完全无监督）
-----------------------
+自举流程（完全无监督） / Bootstrapping (fully unsupervised)
+-------------------------------------------------------------
 1. 在暗结构图 (black-hat) 上用 **合成椭圆环模板** 做多方向匹配，乘以局部暗结构能量，
    取得分最高且互不重叠的 K 个种子（高置信度，几乎全是气孔）。
+   Match a **synthetic elliptical-ring template** at many orientations on the black-hat map,
+   multiply by local dark-structure energy, and take the K best non-overlapping seeds (high
+   confidence, almost all stomata).
 2. 用二阶矩估计每个种子的主轴方向，把 patch 旋转到"长轴竖直"的规范姿态。
+   Estimate each seed's principal axis from second moments and rotate the patch to the canonical
+   "major axis vertical" pose.
 3. 求平均并做 4 重对称化（气孔关于长/短轴对称）⇒ 数据驱动模板，噪声 ∝ 1/√K。
+   Average and apply 4-fold symmetrisation (stomata are symmetric about both axes) ⇒ a data-driven
+   template with noise ∝ 1/√K.
 4. 可再迭代一次：用新模板重新选种子、按匹配到的最佳角度对齐，模板更锐利。
+   Optionally iterate once more: reselect seeds with the new template and align them by their best
+   matching angle, which sharpens the template.
 """
 from __future__ import annotations
 
@@ -28,10 +44,11 @@ from skimage.feature import peak_local_max
 
 
 # ----------------------------------------------------------------------------
-# 合成模板
+# 合成模板 / Synthetic template
 # ----------------------------------------------------------------------------
 def synthetic_ring_template(a: float, b: float, theta_deg: float = 0.0, pad: int = 6) -> np.ndarray:
-    """暗结构域 (亮=暗线) 的理想气孔：外椭圆环 + 内部透镜形裂隙环。"""
+    """暗结构域 (亮=暗线) 的理想气孔：外椭圆环 + 内部透镜形裂隙环。
+    Ideal stoma in the dark-structure domain (bright = dark line): outer elliptical ring + inner lens-shaped slit ring."""
     size = int(2 * max(a, b) + 2 * pad) | 1
     T = np.zeros((size, size), np.float32)
     c = (size // 2, size // 2)
@@ -41,7 +58,7 @@ def synthetic_ring_template(a: float, b: float, theta_deg: float = 0.0, pad: int
 
 
 # ----------------------------------------------------------------------------
-# 旋转模板匹配
+# 旋转模板匹配 / Rotated template matching
 # ----------------------------------------------------------------------------
 def rotate_template(T: np.ndarray, angle_deg: float) -> np.ndarray:
     n = T.shape[0]
@@ -50,7 +67,8 @@ def rotate_template(T: np.ndarray, angle_deg: float) -> np.ndarray:
 
 
 def match_full(image: np.ndarray, T: np.ndarray) -> np.ndarray:
-    """cv2.matchTemplate(TM_CCOEFF_NORMED) 并把结果回填到与原图同尺寸（模板中心对齐）。"""
+    """cv2.matchTemplate(TM_CCOEFF_NORMED) 并把结果回填到与原图同尺寸（模板中心对齐）。
+    cv2.matchTemplate(TM_CCOEFF_NORMED), padded back to the image size (aligned to the template centre)."""
     r = cv2.matchTemplate(image, T, cv2.TM_CCOEFF_NORMED)
     out = np.full(image.shape, -1.0, np.float32)
     h, w = T.shape[0] // 2, T.shape[1] // 2
@@ -61,9 +79,14 @@ def match_full(image: np.ndarray, T: np.ndarray) -> np.ndarray:
 
 def make_variant(T: np.ndarray, scale: float = 1.0, aspect: float = 1.0, crop_radius: Optional[float] = None) -> np.ndarray:
     """模板形变：长轴(竖直)方向缩放 scale，短轴方向缩放 scale/aspect，再裁剪为奇数边长方形。
+    Template deformation: scale the major (vertical) axis by `scale` and the minor axis by scale/aspect,
+    then crop to an odd-sided square.
 
     aspect > 1 ⇒ 更细长的气孔（本数据中开放度不同的气孔长宽比约 1.1–1.7）。
     crop_radius: 以规范模板像素计的裁剪半径；紧裁剪让 NCC 聚焦气孔本体而非邻域。
+    aspect > 1 ⇒ a more elongated stoma (aspect ratios of 1.1–1.7 in this data, depending on opening).
+    crop_radius: crop radius in canonical-template pixels; a tight crop focuses NCC on the stoma itself
+    rather than its surroundings.
     """
     Ts = cv2.resize(T, None, fx=scale / aspect, fy=scale, interpolation=cv2.INTER_LINEAR)
     h, w = Ts.shape
@@ -79,8 +102,10 @@ def build_bank(T, scales=(1.0,), aspects=(1.0,), crop_radius=None):
 
 def multi_orientation_match(image, template, angles, scales=(1.0,), aspects=(1.0,), crop_radius=None):
     """在 角度×尺度×长宽比 模板库上取逐像素最大 NCC。
+    Per-pixel maximum NCC over the angle × scale × aspect template bank.
 
     返回 (best, best_angle, best_scale, best_aspect)。
+    Returns (best, best_angle, best_scale, best_aspect).
     """
     best = np.full(image.shape, -1.0, np.float32)
     best_a = np.zeros(image.shape, np.float32)
@@ -100,23 +125,28 @@ def multi_orientation_match(image, template, angles, scales=(1.0,), aspects=(1.0
 
 
 # ----------------------------------------------------------------------------
-# 自举数据模板
+# 自举数据模板 / Bootstrapped data template
 # ----------------------------------------------------------------------------
 def _moment_orientation(patch: np.ndarray, radius: float) -> float:
-    """二阶中心矩求主轴方向（度），返回使长轴旋转到竖直所需的角度。"""
+    """二阶中心矩求主轴方向（度），返回使长轴旋转到竖直所需的角度。
+    Principal-axis orientation (degrees) from second central moments; returns the rotation that makes the major axis vertical."""
     R = patch.shape[0] // 2
     yy, xx = np.mgrid[-R:patch.shape[0] - R, -R:patch.shape[1] - R].astype(np.float32)
     w = patch * ((xx ** 2 + yy ** 2) < radius ** 2)
     mxx, myy, mxy = (w * xx * xx).sum(), (w * yy * yy).sum(), (w * xx * yy).sum()
-    # 惯性主轴相对 x 轴的角度；cv2 旋转角为逆时针（图像 y 向下时视觉上是逆时针）
+    # 惯性主轴相对 x 轴的角度；cv2 旋转角为逆时针（图像 y 向下时视觉上是逆时针） / angle of the principal axis from x; cv2 rotation is counter-clockwise (visually counter-clockwise with y pointing down)
     return 0.5 * float(np.degrees(np.arctan2(2 * mxy, mxx - myy)))
 
 
 def _make_major_vertical(T: np.ndarray) -> np.ndarray:
     """规范姿态 = 长轴竖直。
+    Canonical pose = major axis vertical.
 
     以"外轮廓填充区域"的二阶矩判断：分割暗环 → 填充孔洞 → 取含中心的连通域，
     若其水平方差 > 竖直方差则转置。比依赖中央裂隙明暗更稳健（有的成像条件下孔隙呈亮色）。
+    Decided by second moments of the filled outline: segment the dark ring → fill holes → take the
+    component containing the centre, and transpose if its horizontal variance exceeds the vertical one.
+    More robust than relying on the slit being dark (under some imaging conditions the pore is bright).
     """
     from scipy import ndimage as ndi
 
@@ -137,7 +167,8 @@ def symmetrize(T: np.ndarray) -> np.ndarray:
 
 
 def extract_aligned_mean(image, centers, angles, half: int) -> np.ndarray:
-    """按给定角度把各 patch 旋转到规范姿态后取平均。"""
+    """按给定角度把各 patch 旋转到规范姿态后取平均。
+    Rotate each patch to the canonical pose by its given angle, then average."""
     H, W = image.shape
     acc, n = np.zeros((2 * half, 2 * half), np.float64), 0
     for (r, c), ang in zip(centers, angles):
@@ -149,16 +180,18 @@ def extract_aligned_mean(image, centers, angles, half: int) -> np.ndarray:
         acc += cv2.warpAffine(p, M, (2 * half, 2 * half), borderMode=cv2.BORDER_REFLECT)
         n += 1
     if n == 0:
-        raise RuntimeError("没有可用于自举模板的种子，请检查 expected_size 或图像内容。")
+        raise RuntimeError("没有可用于自举模板的种子，请检查 expected_size 或图像内容。 / "
+                           "No seeds available to bootstrap a template; check expected_size or the image content.")
     return symmetrize((acc / n).astype(np.float32))
 
 
 @dataclass
 class StomaTemplate:
-    """规范姿态（长轴竖直）的数据模板及其几何量。"""
-    image: np.ndarray                 # 模板灰度 (奇数边长)
-    major_px: float                   # 模板中气孔外轮廓长轴（像素）
-    minor_px: float                   # 短轴
+    """规范姿态（长轴竖直）的数据模板及其几何量。
+    Data template in canonical pose (major axis vertical) and its geometry."""
+    image: np.ndarray                 # 模板灰度 (奇数边长) / template grey image (odd side length)
+    major_px: float                   # 模板中气孔外轮廓长轴（像素） / outer major axis of the stoma in the template (px)
+    minor_px: float                   # 短轴 / minor axis
     n_seeds: int = 0
     history: list = field(default_factory=list)
 
@@ -173,8 +206,11 @@ class StomaTemplate:
 
 def measure_template_axes(T: np.ndarray) -> tuple[float, float]:
     """在模板上分割暗环并拟合椭圆，得到外轮廓长/短轴。
+    Segment the dark ring of the template and fit an ellipse to get the outer major/minor axes.
 
     做法：暗像素 (T < μ - 0.5σ) → 闭运算连接环 → 填充 → 取包含中心的连通域 → fitEllipse。
+    Method: dark pixels (T < μ - 0.5σ) → closing to join the ring → fill → component containing the
+    centre → fitEllipse.
     """
     mu, sd = float(T.mean()), float(T.std())
     dark = (T < mu - 0.5 * sd).astype(np.uint8)
@@ -198,13 +234,14 @@ def bootstrap_template(
     n_iter: int = 2,
     angle_step: float = 15.0,
 ) -> StomaTemplate:
-    """从单张图像无监督地学习气孔模板（见模块文档）。"""
+    """从单张图像无监督地学习气孔模板（见模块文档）。
+    Learn a stoma template from a single image without supervision (see the module docstring)."""
     a, b = expected_major / 2.0, expected_major / 2.0 * 0.78
     half = int(round(expected_major * 0.75))
     min_dist = int(expected_major * 0.6)
     border = half + 2
 
-    # ---- 第 0 轮：合成椭圆环模板在暗结构域匹配，乘以局部能量抑制空白背景 ----
+    # ---- 第 0 轮：合成椭圆环模板在暗结构域匹配，乘以局部能量抑制空白背景 ---- / round 0: match the synthetic ring template in the dark-structure domain, multiplied by local energy to suppress blank background ----
     syn = synthetic_ring_template(a, b)
     angles = np.arange(0, 180, angle_step)
     ncc = multi_orientation_match(ridge, syn, angles)[0]
@@ -216,13 +253,13 @@ def bootstrap_template(
     T = _make_major_vertical(T)
     history = [T]
 
-    # ---- 后续轮：用数据模板重新选种子，按最佳匹配角度对齐 ----
+    # ---- 后续轮：用数据模板重新选种子，按最佳匹配角度对齐 ---- / later rounds: reselect seeds with the data template and align by the best matching angle ----
     for _ in range(max(0, n_iter - 1)):
         Tc = T[1:, 1:] if T.shape[0] % 2 == 0 else T
         ncc, best_a, _, _ = multi_orientation_match(enhanced, Tc, angles)
         score = ncc * gate
         pk = peak_local_max(score, min_distance=min_dist, num_peaks=n_seeds, exclude_border=border)
-        # 模板被旋转 +ang 后匹配 ⇒ 将 patch 旋转 -ang 回到规范姿态
+        # 模板被旋转 +ang 后匹配 ⇒ 将 patch 旋转 -ang 回到规范姿态 / the template matched after rotating by +ang ⇒ rotate the patch by -ang back to the canonical pose
         T = _make_major_vertical(extract_aligned_mean(enhanced, pk, [-best_a[r, c] for r, c in pk], half))
         history.append(T)
 

@@ -1,12 +1,20 @@
 """评估：Precision / Recall / F1（点匹配）。
+Evaluation: Precision / Recall / F1 (point matching).
 
 气孔计数任务的评估以 *中心点* 为单位：
+Stomata counting is evaluated on *centre points*:
     · 预测点 p 与真值点 g 距离 ≤ tol 才可能匹配；
+      a prediction p can match a ground-truth point g only if their distance ≤ tol;
     · 用匈牙利算法 (linear_sum_assignment) 求最小代价一对一匹配，
       保证一个真值只能被一个预测"认领"——重复检测会被计为 FP，
       这正是检验"边界/分块重复计数"是否处理干净的关键；
+      the Hungarian algorithm (linear_sum_assignment) gives a minimum-cost one-to-one matching, so each
+      ground truth can be claimed by only one prediction — duplicates count as FP, which is exactly
+      what tests whether border/tile double counting has been handled;
     · 可选 ignore 点：模糊、半出视野、专家也无法判定的目标，
       落在其附近的预测既不算 TP 也不算 FP（COCO 中 iscrowd/ignore 的思想）。
+      optional ignore points (blurred, half out of view, undecidable even for experts): predictions
+      near them count as neither TP nor FP (the iscrowd/ignore idea from COCO).
 
     Precision = TP / (TP + FP)     Recall = TP / (TP + FN)
     F1 = 2PR / (P + R)
@@ -58,7 +66,8 @@ def match_points(
     tol: float = 12.0,
     ignore: Optional[Sequence[Sequence[float]]] = None,
 ) -> MatchResult:
-    """一对一点匹配并计算指标。pred/gt/ignore 为 (x, y) 序列。"""
+    """一对一点匹配并计算指标。pred/gt/ignore 为 (x, y) 序列。
+    One-to-one point matching and metrics; pred/gt/ignore are (x, y) sequences."""
     P = np.asarray(pred, float).reshape(-1, 2)
     G = np.asarray(gt, float).reshape(-1, 2)
     matches = []
@@ -81,24 +90,26 @@ def match_points(
 
 
 # ----------------------------------------------------------------------------
-# 标注文件（JSON）：支持"部分区域标注"——只在若干矩形区域内完整标注
+# 标注文件（JSON）：支持"部分区域标注"——只在若干矩形区域内完整标注 / annotation file (JSON): supports partial annotation — complete labels only inside some rectangles
 # ----------------------------------------------------------------------------
 # {
 #   "image": "leaf_epidermis_01.jpg",
 #   "regions": [
 #       {"box": [x0, y0, x1, y1],
-#        "points": [[x, y], ...],        # 区域内全部气孔中心
-#        "ignore": [[x, y], ...]}         # 可选：难以判定的目标
+#        "points": [[x, y], ...],        # 区域内全部气孔中心 / all stoma centres in the region
+#        "ignore": [[x, y], ...]}         # 可选：难以判定的目标 / optional: undecidable objects
 #   ]
 # }
-# 若不给 regions 而是给顶层 "points"，则视为整图完整标注。
+# 若不给 regions 而是给顶层 "points"，则视为整图完整标注。 / if top-level "points" are given instead of regions, the whole image is fully annotated.
 def load_annotations(path: str) -> dict:
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 
 
 def evaluate_against_annotation(pred_xy: Iterable[Sequence[float]], ann: dict, tol: float = 12.0) -> MatchResult:
-    """按标注文件评估；区域标注时只统计落在各区域内的预测与真值，最后合并。"""
+    """按标注文件评估；区域标注时只统计落在各区域内的预测与真值，最后合并。
+    Evaluate against an annotation file; with region annotations only predictions and ground truth inside
+    each region are counted, then merged."""
     pred_xy = np.asarray(list(pred_xy), float).reshape(-1, 2)
     regions = ann.get("regions")
     if not regions:

@@ -1,7 +1,10 @@
 """stomata —— 植物叶表皮显微图像气孔检测、定位与计数。
+stomata — stomata detection, localisation and counting in leaf-epidermis micrographs.
 
 阶段一（免训练）: ClassicalStomataDetector / StomataCounter / visualize_pipeline
+Stage 1 (training-free): ClassicalStomataDetector / StomataCounter / visualize_pipeline
 阶段二（深度学习）: stomata.dl （YOLO + P2 小目标头 + SAHI 切片推理，需 ultralytics / sahi）
+Stage 2 (deep learning): stomata.dl (YOLO + P2 small-object head + sliced inference; needs ultralytics / sahi)
 """
 from .detector import ClassicalStomataDetector, Detection, DetectionResult, DetectorConfig
 from .counter import StomataCounter, ImageReport

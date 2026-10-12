@@ -1,11 +1,18 @@
 #!/usr/bin/env python
 """Stomata_Enhanced（人工标注）→ 切片 YOLO 数据集 + 数据清单。
+Stomata_Enhanced (human labels) → tiled YOLO dataset + data manifest.
 
 数据布局（main 分支 2026-10-09 整理后）：
     Stomata_Enhanced/train/images + labels  234 对（缺图像的标签会被跳过并记入清单）
     Stomata_Enhanced/val/images + labels    59 对
 旧布局（图像散落在 train/ 根目录或 pre-trainning/images/）仍兼容：用 --extra-images 指定。
 标签格式：每行 `0 x1 y1 x2 y1 x2 y2 x1 y2`（归一化 4 角点，轴对齐矩形），也兼容 `0 cx cy w h`。
+Data layout (after the 2026-10-09 reorganisation on main):
+    Stomata_Enhanced/train/images + labels  234 pairs (labels without an image are skipped and listed in the manifest)
+    Stomata_Enhanced/val/images + labels    59 pairs
+The old layout (images under train/ or pre-trainning/images/) still works via --extra-images.
+Label format: one line per box `0 x1 y1 x2 y1 x2 y2 x1 y2` (normalised 4 corners, axis-aligned
+rectangle); `0 cx cy w h` is also accepted.
 
     python scripts/prepare_human_dataset.py -o datasets/stomata_human
 """
@@ -30,7 +37,7 @@ def stem(p):
 
 def find_pairs(label_dir, image_dirs):
     imgs = {}
-    for d in image_dirs:                       # 靠前的目录优先（Stomata_Enhanced 自带图像优先）
+    for d in image_dirs:                       # 靠前的目录优先（Stomata_Enhanced 自带图像优先） / earlier directories win (Stomata_Enhanced images first)
         for p in sorted(glob.glob(os.path.join(d, "*.jpg")) + glob.glob(os.path.join(d, "*.png"))):
             imgs.setdefault(stem(p), p)
     pairs, missing = [], []
@@ -42,12 +49,12 @@ def find_pairs(label_dir, image_dirs):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", default="data/samples/pre-trainning/Stomata_Enhanced")
-    ap.add_argument("--extra-images", nargs="*", default=[], help="额外的图像搜索目录（兼容旧布局）")
+    ap.add_argument("--extra-images", nargs="*", default=[], help="额外的图像搜索目录（兼容旧布局） / extra image search directories (old layout)")
     ap.add_argument("-o", "--out", default="datasets/stomata_human")
     ap.add_argument("--tile", type=int, default=640)
-    ap.add_argument("--train-overlap", type=float, default=0.0, help="2560×1920 恰好切成 4×3 个 640 块")
+    ap.add_argument("--train-overlap", type=float, default=0.0, help="2560×1920 恰好切成 4×3 个 640 块 / 2560×1920 splits exactly into 4×3 tiles of 640")
     ap.add_argument("--exclude", nargs="*", default=["108.1_1", "349.3"],
-                    help="排除标注明显不完整的训练图（108.1_1 只有 3 个框；349.3 右侧整片未标注）")
+                    help="排除标注明显不完整的训练图（108.1_1 只有 3 个框；349.3 右侧整片未标注） / exclude clearly incompletely labelled training images (108.1_1 has only 3 boxes; the right side of 349.3 is unlabelled)")
     a = ap.parse_args()
 
     tr, tr_missing = find_pairs(os.path.join(a.root, "train/labels"), [os.path.join(a.root, "train/images"), os.path.join(a.root, "train"), *a.extra_images])
@@ -77,7 +84,7 @@ def main():
     }
     with open(os.path.join(a.out, "manifest.json"), "w", encoding="utf-8") as f:
         json.dump(manifest, f, ensure_ascii=False, indent=1)
-    print(json.dumps(manifest["counts"]), f"缺图像的训练标签: {len(tr_missing)}")
+    print(json.dumps(manifest["counts"]), f"缺图像的训练标签 / training labels without image: {len(tr_missing)}")
 
 
 if __name__ == "__main__":

@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 """分层误差诊断：失焦（清晰度）是否在控制尺寸等因素后仍独立影响召回。
+Stratified error diagnosis: does defocus (sharpness) still affect recall after controlling for size and other factors?
 
     python scripts/error_stratify_logit.py outputs/eval_human/v2_b_op --conf 0.40
 
@@ -11,6 +12,18 @@
     1. 尺寸 × 清晰度四分位的召回交叉表，按尺寸分层的清晰度效应，以及 Mantel–Haenszel 合并 OR；
     2. 多因素逻辑回归（尺寸、清晰度、对比度、密度、边缘），使用按图像聚类的稳健标准误；
     3. 图像固定效应模型：只用同一张图内部的清晰度差异，排除"整张图难"的混杂。
+
+For each human-labelled stoma, in a window centred on it with side 2 × box long side, compute:
+    · sharpness = E[(G1−G2)²] / E[(G2−G8)²], the fine-band to coarse-band energy ratio. Defocus attenuates
+      the fine band first; the ratio is independent of contrast and brightness.
+    · contrast = std(G2−G8), the coarse-band amplitude, to separate "defocused" from "low contrast".
+Outputs:
+    1. size × sharpness-quartile recall table, the sharpness effect stratified by size, and the
+       Mantel–Haenszel pooled OR;
+    2. multivariable logistic regression (size, sharpness, contrast, density, border) with
+       image-clustered robust standard errors;
+    3. image fixed-effects model: uses only within-image sharpness differences, removing the
+       "whole image is hard" confound.
 """
 from __future__ import annotations
 
@@ -38,7 +51,8 @@ def band_maps(gray):
 
 
 def object_features(fine2, coarse2, coarse, pts, majors):
-    """用积分图快速计算每个气孔窗口内的频带能量。"""
+    """用积分图快速计算每个气孔窗口内的频带能量。
+    Band energies in each stoma window, computed quickly with integral images."""
     H, W = fine2.shape
     Ifine, Icoarse = cv2.integral(fine2.astype(np.float64)), cv2.integral(coarse2.astype(np.float64))
     Ic1 = cv2.integral(coarse.astype(np.float64))
@@ -60,7 +74,8 @@ def object_features(fine2, coarse2, coarse, pts, majors):
 
 
 def fit_logit(X, y, groups=None, l2=1e-4):
-    """带极小 L2 的逻辑回归；groups 给定时返回按组聚类的稳健（sandwich）标准误。"""
+    """带极小 L2 的逻辑回归；groups 给定时返回按组聚类的稳健（sandwich）标准误。
+    Logistic regression with a tiny L2; with groups, returns cluster-robust (sandwich) standard errors."""
     def nll(b):
         z = X @ b
         return np.sum(np.logaddexp(0, z) - y * z) + 0.5 * l2 * b @ b
@@ -87,7 +102,9 @@ def fit_logit(X, y, groups=None, l2=1e-4):
 
 def mantel_haenszel(strata):
     """strata: [(a, b, c, d)]，其中 a、b 为暴露组的漏检/命中数，c、d 为对照组的漏检/命中数。
-    返回合并 OR 和 CMH χ² 检验的 p 值。"""
+    返回合并 OR 和 CMH χ² 检验的 p 值。
+    strata: [(a, b, c, d)] with a, b = misses/hits of the exposed group and c, d = misses/hits of the
+    reference group. Returns the pooled OR and the CMH χ² p value."""
     num = den = 0.0
     sa = ea = va = 0.0
     for a, b, c, d in strata:
@@ -106,7 +123,7 @@ def mantel_haenszel(strata):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("run", help="eval_human.py 的输出目录（含 preds.npz）")
+    ap.add_argument("run", help="eval_human.py 的输出目录（含 preds.npz） / eval_human.py output directory (with preds.npz)")
     ap.add_argument("--root", default="data/samples/pre-trainning/Stomata_Enhanced/val")
     ap.add_argument("--conf", type=float, default=0.40)
     ap.add_argument("--tol-factor", type=float, default=0.5)
@@ -137,17 +154,20 @@ def main():
     miss = 1 - hit
     lsharp, lcon = np.log(sharp), np.log(contrast + 1e-6)
     sq = np.quantile(lsharp, [0.25, 0.5, 0.75])
-    sharp_bin = np.digitize(lsharp, sq)  # 0 = 最模糊 … 3 = 最清晰
+    sharp_bin = np.digitize(lsharp, sq)  # 0 = 最模糊 … 3 = 最清晰 / 0 = blurriest … 3 = sharpest
     size_bin = np.digitize(size, SIZE_EDGES)
     size_lab = [f"<{SIZE_EDGES[0]}"] + [f"{SIZE_EDGES[i]}–{SIZE_EDGES[i + 1]}" for i in range(len(SIZE_EDGES) - 1)] + [f"≥{SIZE_EDGES[-1]}"]
-    q_lab = ["Q1 最模糊", "Q2", "Q3", "Q4 最清晰"]
+    q_lab = ["Q1 最模糊 blurriest", "Q2", "Q3", "Q4 最清晰 sharpest"]
 
-    out = [f"# 尺寸 × 清晰度分层诊断：{a.run}", "",
-           f"置信度阈值 {a.conf}，{len(np.unique(img_id))} 张图，{len(hit)} 个真值，总体召回 {hit.mean():.3f}。",
-           f"清晰度 = 细频带/粗频带能量比（与对比度无关）；四分位界（log）：{', '.join(f'{v:.2f}' for v in sq)}。", "",
-           f"清晰度与尺寸的 Spearman ρ = {stats.spearmanr(lsharp, size)[0]:.2f}；与对比度 ρ = {stats.spearmanr(lsharp, lcon)[0]:.2f}。", "",
-           "## 1. 召回交叉表（单元格：召回 / n）", "",
-           "| 尺寸 \\ 清晰度 | " + " | ".join(q_lab) + " | 合计 |", "|---" * 6 + "|"]
+    out = [f"# 尺寸 × 清晰度分层诊断 / Size × sharpness stratified diagnosis: {a.run}", "",
+           f"置信度阈值 / threshold {a.conf}，{len(np.unique(img_id))} 张图 / images，{len(hit)} 个真值 / GT，"
+           f"总体召回 / overall recall {hit.mean():.3f}。",
+           f"清晰度 = 细频带/粗频带能量比（与对比度无关） / sharpness = fine/coarse band energy ratio (contrast-independent)；"
+           f"四分位界（log） / quartile bounds (log)：{', '.join(f'{v:.2f}' for v in sq)}。", "",
+           f"清晰度与尺寸的 / sharpness vs size Spearman ρ = {stats.spearmanr(lsharp, size)[0]:.2f}；"
+           f"与对比度 / vs contrast ρ = {stats.spearmanr(lsharp, lcon)[0]:.2f}。", "",
+           "## 1. 召回交叉表（单元格：召回 / n） / Recall cross-table (cell: recall / n)", "",
+           "| 尺寸 size \\ 清晰度 sharpness | " + " | ".join(q_lab) + " | 合计 total |", "|---" * 6 + "|"]
     for b, lab in enumerate(size_lab):
         cells = []
         for q in range(4):
@@ -156,12 +176,12 @@ def main():
         sel = size_bin == b
         out.append(f"| {lab} | " + " | ".join(cells) + f" | {hit[sel].mean():.3f} / {sel.sum()} |")
     cells = [f"{hit[sharp_bin == q].mean():.3f} / {(sharp_bin == q).sum()}" for q in range(4)]
-    out.append("| 合计 | " + " | ".join(cells) + f" | {hit.mean():.3f} / {len(hit)} |")
+    out.append("| 合计 total | " + " | ".join(cells) + f" | {hit.mean():.3f} / {len(hit)} |")
 
-    # 按尺寸分层：Q1（最模糊）对 Q2–Q4 的漏检 OR
+    # 按尺寸分层：Q1（最模糊）对 Q2–Q4 的漏检 OR / stratified by size: miss OR of Q1 (blurriest) vs Q2–Q4
     strata = []
-    out += ["", "## 2. 按尺寸分层的清晰度效应（Q1 最模糊 vs Q2–Q4）", "",
-            "| 尺寸 | Q1 召回 | Q2–Q4 召回 | 差值 | 漏检 OR |", "|---|---|---|---|---|"]
+    out += ["", "## 2. 按尺寸分层的清晰度效应（Q1 最模糊 vs Q2–Q4） / Sharpness effect by size (Q1 blurriest vs Q2–Q4)", "",
+            "| 尺寸 size | Q1 召回 recall | Q2–Q4 召回 recall | 差值 diff | 漏检 OR miss OR |", "|---|---|---|---|---|"]
     for b, lab in enumerate(size_lab):
         e, c = (size_bin == b) & (sharp_bin == 0), (size_bin == b) & (sharp_bin > 0)
         t = (miss[e].sum(), hit[e].sum(), miss[c].sum(), hit[c].sum())
@@ -169,41 +189,46 @@ def main():
         orr = (t[0] + .5) * (t[3] + .5) / ((t[1] + .5) * (t[2] + .5))
         out.append(f"| {lab} | {hit[e].mean():.3f} | {hit[c].mean():.3f} | {hit[e].mean() - hit[c].mean():+.3f} | {orr:.2f} |")
     or_mh, p_mh = mantel_haenszel(strata)
-    out += ["", f"Mantel–Haenszel 合并漏检 OR（控制尺寸）= **{or_mh:.2f}**，CMH p = {p_mh:.1e}。",
-            "注意：CMH 检验假定各目标相互独立，而同一张图的目标是相关的，所以这个 p 偏乐观，以下面的聚类稳健模型为准。"]
+    out += ["", f"Mantel–Haenszel 合并漏检 OR（控制尺寸） / pooled miss OR (size-adjusted) = **{or_mh:.2f}**，CMH p = {p_mh:.1e}。",
+            "注意：CMH 检验假定各目标相互独立，而同一张图的目标是相关的，所以这个 p 偏乐观，以下面的聚类稳健模型为准。 "
+            "Note: CMH assumes independent objects, but objects in one image are correlated, so this p is optimistic; "
+            "rely on the cluster-robust model below."]
 
-    # 多因素逻辑回归：因变量为漏检
+    # 多因素逻辑回归：因变量为漏检 / multivariable logistic regression: outcome = miss
     def z_(v):
         return (v - v.mean()) / v.std()
-    size_d = np.stack([(size_bin == b).astype(float) for b in range(len(size_lab)) if b != 2], 1)  # 基准 50–60
-    names = ["截距"] + [f"尺寸 {size_lab[b]}（vs 50–60）" for b in range(len(size_lab)) if b != 2] + \
-            ["清晰度（每 1 SD，log）", "对比度（每 1 SD，log）", "密度（每 1 SD）", "距边缘 < 25 px"]
+    size_d = np.stack([(size_bin == b).astype(float) for b in range(len(size_lab)) if b != 2], 1)  # 基准 50–60 / reference 50–60
+    names = ["截距 Intercept"] + [f"尺寸 size {size_lab[b]}（vs 50–60）" for b in range(len(size_lab)) if b != 2] + \
+            ["清晰度 sharpness（每 per 1 SD，log）", "对比度 contrast（每 per 1 SD，log）", "密度 density（每 per 1 SD）",
+             "距边缘 border distance < 25 px"]
     X = np.column_stack([np.ones(len(hit)), size_d, z_(lsharp), z_(lcon), z_(dens), (edge < 25).astype(float)])
     b, se = fit_logit(X, miss, img_id)
-    out += ["", "## 3. 多因素逻辑回归（因变量 = 漏检，聚类稳健 SE，按图像聚类）", "",
-            "| 变量 | 漏检 OR | 95% CI | p |", "|---|---|---|---|"]
+    out += ["", "## 3. 多因素逻辑回归（因变量 = 漏检，聚类稳健 SE，按图像聚类） / Multivariable logistic regression (outcome = miss, image-clustered robust SE)", "",
+            "| 变量 variable | 漏检 OR miss OR | 95% CI | p |", "|---|---|---|---|"]
     for n, bi, si in zip(names, b, se):
-        if n == "截距":
+        if n == "截距 Intercept":
             continue
         out.append(f"| {n} | {np.exp(bi):.2f} | {np.exp(bi - 1.96 * si):.2f}–{np.exp(bi + 1.96 * si):.2f} | {2 * stats.norm.sf(abs(bi / si)):.1e} |")
 
-    # 图像固定效应：只用图内的变化
+    # 图像固定效应：只用图内的变化 / image fixed effects: within-image variation only
     imgs = np.unique(img_id)
     FE = np.stack([(img_id == u).astype(float) for u in imgs], 1)
     Xfe = np.column_stack([FE, size_d, z_(lsharp), z_(lcon), z_(dens), (edge < 25).astype(float)])
     bf, sef = fit_logit(Xfe, miss, img_id, l2=1e-2)
     k = len(imgs)
-    out += ["", "## 4. 图像固定效应模型（只用同一张图内部的差异）", "",
-            "| 变量 | 漏检 OR | 95% CI | p |", "|---|---|---|---|"]
+    out += ["", "## 4. 图像固定效应模型（只用同一张图内部的差异） / Image fixed-effects model (within-image differences only)", "",
+            "| 变量 variable | 漏检 OR miss OR | 95% CI | p |", "|---|---|---|---|"]
     for n, bi, si in zip(names[1:], bf[k:], sef[k:]):
         out.append(f"| {n} | {np.exp(bi):.2f} | {np.exp(bi - 1.96 * si):.2f}–{np.exp(bi + 1.96 * si):.2f} | {2 * stats.norm.sf(abs(bi / si)):.1e} |")
 
-    # 图像层面：每图清晰度中位数 与 每图召回
+    # 图像层面：每图清晰度中位数 与 每图召回 / image level: median sharpness vs recall per image
     per = [(u, np.median(lsharp[img_id == u]), hit[img_id == u].mean(), (img_id == u).sum()) for u in imgs]
     rho, p_rho = stats.spearmanr([t[1] for t in per], [t[2] for t in per])
-    out += ["", "## 5. 图像层面", "",
-            f"每图清晰度中位数 与 每图召回：Spearman ρ = {rho:.2f}（p = {p_rho:.1e}，n = {len(per)}）。", "",
-            "最模糊的 8 张图：", "", "| 图像 | 清晰度中位数（log） | 召回 | 真值数 |", "|---|---|---|---|"]
+    out += ["", "## 5. 图像层面 / Image level", "",
+            f"每图清晰度中位数 与 每图召回 / per-image median sharpness vs per-image recall：Spearman ρ = {rho:.2f}"
+            f"（p = {p_rho:.1e}，n = {len(per)}）。", "",
+            "最模糊的 8 张图 / 8 blurriest images：", "",
+            "| 图像 image | 清晰度中位数（log） median sharpness | 召回 recall | 真值数 GT |", "|---|---|---|---|"]
     for u, s_, r_, n_ in sorted(per, key=lambda t: t[1])[:8]:
         out.append(f"| {u} | {s_:.2f} | {r_:.3f} | {n_} |")
 

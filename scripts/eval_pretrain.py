@@ -1,11 +1,16 @@
 #!/usr/bin/env python
 """用切片推理在整图上评估预训练模型：与伪标签点做一对一匹配（P/R/F1），并对比计数。
+Evaluate the pre-trained model on whole images with sliced inference: one-to-one matching against
+pseudo-label points (P/R/F1) and count comparison.
 
     python scripts/eval_pretrain.py --weights runs/stomata/pretrain_v8n_p2/weights/best.pt \
         --images 137.1.jpg 49.2.jpg 573.2.jpg 9.3.jpg
 
 只统计有效区域掩膜内的预测与标签（掩膜外本来就没有标注）。
 注意：参考点本身是外部自动流程的伪标签，指标反映"与该流程的一致程度"，不等于对人工真值的精度。
+Only predictions and labels inside the valid-area mask are counted (there are no labels outside it).
+Note: the reference points are pseudo-labels from an external automatic pipeline, so the metrics measure
+agreement with that pipeline, not accuracy against human ground truth.
 """
 from __future__ import annotations
 
@@ -26,12 +31,12 @@ from stomata.evaluation import match_points, precision_recall_f1  # noqa: E402
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--weights", required=True)
-    ap.add_argument("--images", nargs="+", required=True, help="model_review_samples/images 下的文件名")
+    ap.add_argument("--images", nargs="+", required=True, help="model_review_samples/images 下的文件名 / file names under model_review_samples/images")
     ap.add_argument("--src", default="data/samples/pre-trainning/model_review_samples/images")
     ap.add_argument("--labels", default="data/pretraining_labels")
     ap.add_argument("--conf", type=float, default=0.25)
-    ap.add_argument("--tol-factor", type=float, default=0.35, help="匹配容差 = factor × 该图长轴中位数")
-    ap.add_argument("--out", default=None, help="可选：保存叠加图的目录")
+    ap.add_argument("--tol-factor", type=float, default=0.35, help="匹配容差 = factor × 该图长轴中位数 / matching tolerance = factor × the image's median major axis")
+    ap.add_argument("--out", default=None, help="可选：保存叠加图的目录 / optional: directory for overlay images")
     a = ap.parse_args()
 
     pred_fn = ultralytics_tile_predictor(a.weights, conf=a.conf, device="cpu")

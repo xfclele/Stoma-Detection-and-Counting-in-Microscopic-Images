@@ -14,6 +14,27 @@
     summary.csv            每图：提取点数 / CSV 计数 / 有效面积比 / 估计长轴
 
 注意：这些点是外部自动流程（YOLO）的输出，即**伪标签**而非人工真值。
+
+English
+-------
+Recover point labels and valid-area masks from the "image + detection overlay" pairs in
+data/samples/pre-trainning.
+
+Input layout (from an external automatic counting pipeline):
+    images/<name>.jpg      original image
+    overlays/<name>.jpg    the same image with detections drawn on it:
+                           · a small green dot (~30 px²) at each kept stoma centre
+                           · excluded non-epidermis areas covered by a translucent dark-red mask:
+                             overlay ≈ 0.35·img + (0, 0, 52) (BGR)
+    auto_count_results.csv per-image counts (to check the extraction)
+
+Output (--out directory):
+    labels/<name>.json     {"image", "points": [[x, y], ...], "major_px": [...], "mask": "masks/<name>.png"}
+    masks/<name>.png       valid epidermis mask (255 = valid, 0 = excluded)
+    summary.csv            per image: extracted points / CSV count / valid-area fraction / estimated major axis
+
+Note: these points come from an external automatic pipeline (YOLO), i.e. they are **pseudo-labels**,
+not human ground truth.
 """
 from __future__ import annotations
 
@@ -33,7 +54,8 @@ from stomata.preprocessing import clahe, flat_field_correct, to_gray_float  # no
 
 
 def extract_points(img: np.ndarray, ov: np.ndarray, min_area: int = 8, max_area: int = 200) -> np.ndarray:
-    """绿色圆点：G 明显高于 R、B 的小连通域，取质心。"""
+    """绿色圆点：G 明显高于 R、B 的小连通域，取质心。
+    Green dots: small components where G clearly exceeds R and B; take their centroids."""
     b, g, r = [ov[..., i].astype(np.int32) for i in range(3)]
     green = (g > 150) & (g - r > 80) & (g - b > 80)
     n, _, st, cen = cv2.connectedComponentsWithStats(green.astype(np.uint8))
@@ -42,20 +64,22 @@ def extract_points(img: np.ndarray, ov: np.ndarray, min_area: int = 8, max_area:
 
 
 def extract_valid_mask(img: np.ndarray, ov: np.ndarray, points: np.ndarray) -> np.ndarray:
-    """红色遮罩区：overlay 的 R−B 明显偏大（原图为灰度，R≈B）。返回有效区域 (uint8, 255=有效)。"""
+    """红色遮罩区：overlay 的 R−B 明显偏大（原图为灰度，R≈B）。返回有效区域 (uint8, 255=有效)。
+    Red-masked area: R−B is clearly large in the overlay (the original is grey, R≈B). Returns the valid area (uint8, 255 = valid)."""
     b, r = ov[..., 0].astype(np.int32), ov[..., 2].astype(np.int32)
     red = ((r - b) > 25).astype(np.uint8)
     k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
-    red = cv2.morphologyEx(red, cv2.MORPH_CLOSE, k)   # 填补遮罩内的近黑/近白像素（色差被压缩）
+    red = cv2.morphologyEx(red, cv2.MORPH_CLOSE, k)   # 填补遮罩内的近黑/近白像素（色差被压缩） / fill near-black/near-white pixels inside the mask (colour difference compressed)
     red = cv2.morphologyEx(red, cv2.MORPH_OPEN, k)
     valid = (1 - red).astype(np.uint8) * 255
-    for x, y in points:                               # 绿点处一定有效
+    for x, y in points:                               # 绿点处一定有效 / green-dot locations are always valid
         cv2.circle(valid, (int(x), int(y)), 6, 255, -1)
     return valid
 
 
 def estimate_major(img: np.ndarray, points: np.ndarray, guess: float) -> np.ndarray:
-    """在每个点上用射线-椭圆拟合测量长轴；失败的点用成功点的中位数代替。"""
+    """在每个点上用射线-椭圆拟合测量长轴；失败的点用成功点的中位数代替。
+    Measure the major axis at each point with the ray-ellipse fit; failures get the median of successes."""
     det = ClassicalStomataDetector(DetectorConfig(expected_major_px=guess))
     g = clahe(flat_field_correct(to_gray_float(img)))
     g = cv2.GaussianBlur(g, (0, 0), 1.5)
@@ -73,7 +97,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("src", nargs="?", default="data/samples/pre-trainning/model_review_samples")
     ap.add_argument("-o", "--out", default="data/pretraining_labels")
-    ap.add_argument("--major-guess", type=float, default=50.0, help="长轴初值（像素），用于射线测量的搜索半径")
+    ap.add_argument("--major-guess", type=float, default=50.0, help="长轴初值（像素），用于射线测量的搜索半径 / initial major axis (px), the search radius of the ray measurement")
     a = ap.parse_args()
 
     os.makedirs(os.path.join(a.out, "labels"), exist_ok=True)
@@ -88,7 +112,7 @@ def main():
     for name in names:
         ov_path = os.path.join(a.src, "overlays", name)
         if not os.path.exists(ov_path):
-            print(f"跳过 {name}：缺少 overlay")
+            print(f"跳过 / skip {name}：缺少 overlay / missing overlay")
             continue
         img = cv2.imread(os.path.join(a.src, "images", name))
         ov = cv2.imread(ov_path)
@@ -98,7 +122,7 @@ def main():
         stem = os.path.splitext(name)[0]
         cv2.imwrite(os.path.join(a.out, "masks", stem + ".png"), valid)
         with open(os.path.join(a.out, "labels", stem + ".json"), "w", encoding="utf-8") as f:
-            # 框尺寸统一用整图中位数（逐点射线测量噪声较大，会让框尺寸抖动）；逐点测量值另存备查
+            # 框尺寸统一用整图中位数（逐点射线测量噪声较大，会让框尺寸抖动）；逐点测量值另存备查 / box size uses the image median (per-point ray measurements are noisy); per-point values are saved for reference
             json.dump({"image": name, "points": np.round(pts, 1).tolist(), "major_px": [round(med, 1)] * len(pts),
                        "major_px_measured": np.round(majors, 1).tolist(),
                        "mask": f"masks/{stem}.png", "source": "pseudo-label (external auto-count overlay)"}, f)

@@ -1,4 +1,6 @@
-"""合成叶表皮图像：气孔（暗外环 + 亮保卫细胞 + 暗裂隙）+ 细胞壁弧线 + 叶脉条纹 + 乘性光照不均 + 噪声。"""
+"""合成叶表皮图像：气孔（暗外环 + 亮保卫细胞 + 暗裂隙）+ 细胞壁弧线 + 叶脉条纹 + 乘性光照不均 + 噪声。
+Synthetic leaf epidermis: stomata (dark outer ring + bright guard cells + dark slit) + cell-wall arcs +
+vein stripes + multiplicative uneven illumination + noise."""
 from __future__ import annotations
 
 import cv2
@@ -6,25 +8,26 @@ import numpy as np
 
 
 def draw_stoma(canvas, x, y, major, minor, angle_deg, dark=0.35):
-    """angle_deg 与检测器约定一致：长轴 = 竖直方向逆时针旋转 angle_deg。"""
-    ang = 90.0 - angle_deg  # cv2.ellipse 角度：第一轴相对 x 轴
+    """angle_deg 与检测器约定一致：长轴 = 竖直方向逆时针旋转 angle_deg。
+    angle_deg follows the detector convention: major axis = vertical rotated counter-clockwise by angle_deg."""
+    ang = 90.0 - angle_deg  # cv2.ellipse 角度：第一轴相对 x 轴 / cv2.ellipse angle: first axis relative to x
     c = (int(round(x)), int(round(y)))
     a, b = int(major / 2), int(minor / 2)
-    cv2.ellipse(canvas, c, (a, b), ang, 0, 360, 0.93, -1, cv2.LINE_AA)            # 亮保卫细胞
-    cv2.ellipse(canvas, c, (a, b), ang, 0, 360, dark, 3, cv2.LINE_AA)             # 暗外壁
-    cv2.ellipse(canvas, c, (int(a * 0.72), max(2, int(b * 0.28))), ang, 0, 360, dark + 0.1, -1, cv2.LINE_AA)  # 裂隙
+    cv2.ellipse(canvas, c, (a, b), ang, 0, 360, 0.93, -1, cv2.LINE_AA)            # 亮保卫细胞 / bright guard cells
+    cv2.ellipse(canvas, c, (a, b), ang, 0, 360, dark, 3, cv2.LINE_AA)             # 暗外壁 / dark outer wall
+    cv2.ellipse(canvas, c, (int(a * 0.72), max(2, int(b * 0.28))), ang, 0, 360, dark + 0.1, -1, cv2.LINE_AA)  # 裂隙 / slit
 
 
 def make_synthetic(w=640, h=480, n=22, seed=0, major=(30, 40), veins=True, walls=True):
     rng = np.random.default_rng(seed)
     img = np.full((h, w), 0.82, np.float32)
-    if walls:  # 表皮细胞壁：随机短弧
+    if walls:  # 表皮细胞壁：随机短弧 / epidermal cell walls: random short arcs
         for _ in range(160):
             cx, cy = rng.uniform(0, w), rng.uniform(0, h)
             ax = int(rng.uniform(8, 25))
             cv2.ellipse(img, (int(cx), int(cy)), (ax, int(ax * rng.uniform(0.2, 0.6))), rng.uniform(0, 180),
                         0, rng.uniform(40, 120), 0.55, 2, cv2.LINE_AA)
-    if veins:  # 叶脉：右下角一组平行长条纹
+    if veins:  # 叶脉：右下角一组平行长条纹 / vein: parallel long stripes in the lower-right corner
         for k in range(7):
             off = 12 * k
             cv2.line(img, (w // 2 + off, h), (w + off, h // 2 + 40), 0.5, 3, cv2.LINE_AA)
@@ -34,7 +37,7 @@ def make_synthetic(w=640, h=480, n=22, seed=0, major=(30, 40), veins=True, walls
         tries += 1
         L = rng.uniform(*major)
         x, y = rng.uniform(L, w - L), rng.uniform(L, h - L)
-        if veins and (x - w / 2) > (h - y) * (w / 2) / (h / 2 - 40) - 30:  # 避开叶脉区
+        if veins and (x - w / 2) > (h - y) * (w / 2) / (h / 2 - 40) - 30:  # 避开叶脉区 / avoid the vein area
             continue
         if all(np.hypot(x - px, y - py) > 1.2 * L for px, py, _ in pts):
             pts.append((x, y, L))

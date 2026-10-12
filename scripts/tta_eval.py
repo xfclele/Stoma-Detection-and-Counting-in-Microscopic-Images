@@ -1,12 +1,14 @@
 #!/usr/bin/env python
 """多尺度 TTA 实验：先按尺度推理并缓存，再离线融合；输出目录可直接用 eval_human.py --from-npz 评估。
+Multi-scale TTA experiment: infer per scale and cache, then fuse offline; outputs can be evaluated directly
+with eval_human.py --from-npz.
 
-    # 1) 在 1.25× 整图上切片推理（1.0× 可复用已有的 preds.npz）
+    # 1) 在 1.25× 整图上切片推理（1.0× 可复用已有的 preds.npz） / sliced inference on the 1.25× image (1.0× can reuse an existing preds.npz)
     python scripts/tta_eval.py infer --scale 1.25 -o outputs/eval_human/tta/s1.25
-    # 2) 融合
+    # 2) 融合 / fuse
     python scripts/tta_eval.py fuse outputs/eval_human/sahi_cmp/sliced_ic0.05 outputs/eval_human/tta/s1.25 \
         --mode wbf -o outputs/eval_human/tta/wbf
-    # 3) 评估
+    # 3) 评估 / evaluate
     python scripts/eval_human.py --from-npz -o outputs/eval_human/tta/wbf --exclude 118.2 221.2 --conf 0.40
 """
 from __future__ import annotations
@@ -66,7 +68,7 @@ def main():
     p.add_argument("-o", "--out", required=True)
     p.set_defaults(fn=cmd_infer)
     p = sub.add_parser("fuse")
-    p.add_argument("runs", nargs="+", help="各尺度的输出目录（第一个为 1.0× 基准）")
+    p.add_argument("runs", nargs="+", help="各尺度的输出目录（第一个为 1.0× 基准） / output directory of each scale (the first is the 1.0× reference)")
     p.add_argument("--mode", choices=["wbf", "nms", "small"], default="wbf")
     p.add_argument("--thr", type=float, default=0.5)
     p.add_argument("--small-px", type=float, default=40.0)

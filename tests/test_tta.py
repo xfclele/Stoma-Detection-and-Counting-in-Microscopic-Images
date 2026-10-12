@@ -4,7 +4,7 @@ from stomata.dl.sliced_inference import BoxDetection
 from stomata.dl.tta import fuse_scales, predict_at_scale
 
 A = np.array([[100, 100, 150, 150, 0.9], [300, 300, 330, 330, 0.5]], np.float32)   # 1.0×
-B = np.array([[102, 101, 151, 149, 0.7], [500, 500, 530, 530, 0.6],                  # 1.25×：1 个重叠 + 2 个新框
+B = np.array([[102, 101, 151, 149, 0.7], [500, 500, 530, 530, 0.6],                  # 1.25×：1 个重叠 + 2 个新框 / 1.25×: 1 overlapping + 2 new boxes
               [800, 800, 880, 880, 0.8]], np.float32)
 
 
@@ -12,9 +12,9 @@ def test_wbf_merges_across_scales_and_averages_scores():
     f = fuse_scales([A, B], "wbf")
     assert len(f) == 4
     merged = f[np.argmin(np.abs(f[:, 0] - 101))]
-    assert np.isclose(merged[4], (0.9 + 0.7) / 2)          # 两个尺度都检出 → 分数取平均
+    assert np.isclose(merged[4], (0.9 + 0.7) / 2)          # 两个尺度都检出 → 分数取平均 / found at both scales → mean score
     single = f[np.argmin(np.abs(f[:, 0] - 300))]
-    assert np.isclose(single[4], 0.25)                      # 只有一个尺度检出 → 分数减半
+    assert np.isclose(single[4], 0.25)                      # 只有一个尺度检出 → 分数减半 / found at one scale only → score halved
 
 
 def test_nms_keeps_highest():
@@ -24,18 +24,18 @@ def test_nms_keeps_highest():
 
 def test_small_only_adds_small_new_boxes():
     f = fuse_scales([A, B], "small", small_px=40)
-    assert len(f) == 3                                      # 只补充 500–530 这个 30 px 新框
+    assert len(f) == 3                                      # 只补充 500–530 这个 30 px 新框 / only the new 30 px box at 500–530 is added
     assert any(np.isclose(f[:, 0], 500))
 
 
 def test_small_boosts_score_of_overlapping_base_box():
-    b = np.array([[300, 300, 332, 331, 0.7]], np.float32)  # 小框，与 A 的第二个框重叠
+    b = np.array([[300, 300, 332, 331, 0.7]], np.float32)  # 小框，与 A 的第二个框重叠 / small box overlapping the second box of A
     f = fuse_scales([A, b], "small", small_px=40)
-    assert len(f) == 2 and np.isclose(f[1, 4], 0.7)        # 分数 0.5 → 0.7，不新增框
+    assert len(f) == 2 and np.isclose(f[1, 4], 0.7)        # 分数 0.5 → 0.7，不新增框 / score 0.5 → 0.7, no new box
 
 
 def test_predict_at_scale_maps_back_to_original_coords():
-    def fake(img):                                          # 在缩放后的图上固定返回中心附近一个框
+    def fake(img):                                          # 在缩放后的图上固定返回中心附近一个框 / always returns one box near the centre of the resized image
         h, w = img.shape[:2]
         return [BoxDetection(w / 2 - 10, h / 2 - 10, w / 2 + 10, h / 2 + 10, 0.8)]
 

@@ -11,7 +11,7 @@ def test_prf_basic():
 
 def test_one_to_one_matching_counts_duplicates_as_fp():
     gt = [(10, 10), (50, 50)]
-    pred = [(11, 10), (12, 11), (49, 52), (200, 200)]   # 第二个点是第一个 GT 的重复检测
+    pred = [(11, 10), (12, 11), (49, 52), (200, 200)]   # 第二个点是第一个 GT 的重复检测 / the second point duplicates the first GT
     m = match_points(pred, gt, tol=5)
     assert (m.tp, m.fp, m.fn) == (2, 2, 0)
 
@@ -24,6 +24,6 @@ def test_ignore_points_are_neutral():
 def test_region_annotations():
     ann = {"regions": [{"box": [0, 0, 100, 100], "points": [[20, 20], [60, 60]], "ignore": []},
                        {"box": [200, 200, 300, 300], "points": [[250, 250]]}]}
-    pred = np.array([[21, 19], [250, 252], [500, 500]])   # (500,500) 在所有区域之外，不计入
+    pred = np.array([[21, 19], [250, 252], [500, 500]])   # (500,500) 在所有区域之外，不计入 / (500,500) is outside every region and is ignored
     m = evaluate_against_annotation(pred, ann, tol=5)
     assert (m.tp, m.fp, m.fn) == (2, 0, 1)

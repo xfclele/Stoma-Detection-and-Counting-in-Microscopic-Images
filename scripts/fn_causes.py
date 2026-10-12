@@ -1,13 +1,18 @@
 #!/usr/bin/env python
 """漏检原因分类：判断"两个气孔被合成一个框"等后处理问题到底有多常见。
+Classify missed detections: how common are post-processing problems such as "two stomata merged into one box"?
 
     python scripts/fn_causes.py outputs/eval_human/v2_b_op --conf 0.40
 
 对每个漏检（FN）的人工真值中心：
+For each missed (FN) ground-truth centre:
     low       容差内有预测框，但分数低于 conf（模型找到了但不够确信）
+              a prediction within tolerance, but scored below conf (found, not confident enough)
     adjacent  容差内没有，但 1 个长轴距离内有一个已匹配的预测框（粘连 / 合并的上限）
+              none within tolerance, but a matched prediction within one major axis (upper bound of touching / merging)
     merged    adjacent 的子集：中心落在一个已匹配框内，且该框包含 ≥2 个真值中心（"二合一"）
-    none      附近没有任何候选
+              subset of adjacent: the centre lies in a matched box containing ≥ 2 GT centres ("two-in-one")
+    none      附近没有任何候选 / no candidate nearby
 """
 from __future__ import annotations
 
@@ -29,7 +34,7 @@ def centers(P):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("run", help="eval_human.py 输出目录（含 preds.npz，建议推理阈值 ≤ 0.05）")
+    ap.add_argument("run", help="eval_human.py 输出目录（含 preds.npz，建议推理阈值 ≤ 0.05） / eval_human.py output directory (with preds.npz; inference threshold ≤ 0.05 recommended)")
     ap.add_argument("--root", default="data/samples/pre-trainning/Stomata_Enhanced/val")
     ap.add_argument("--exclude", nargs="*", default=["118.2", "221.2"])
     ap.add_argument("--conf", type=float, default=0.40)
@@ -66,13 +71,14 @@ def main():
                     break
 
     n = cnt["low"] + cnt["adjacent"] + cnt["none"]
-    print(f"漏检 {n} 个（conf {a.conf}，{len(gt)} 张图）")
+    print(f"漏检 / missed: {n}（conf {a.conf}，{len(gt)} 张图 / images）")
     for k in ("low", "adjacent", "merged", "none"):
         print(f"  {k:9s} {cnt[k]:5d}  {cnt[k] / n:6.1%}")
-    print(f"密集区（100 px 内 ≥5 邻居）漏检：{dense}")
+    print(f"密集区（100 px 内 ≥5 邻居）漏检 / misses in dense areas (≥5 neighbours within 100 px): {dense}")
     if merged_rel:
         r = np.array(merged_rel)
-        print(f"二合一框长边 / 本图中位长轴：中位 {np.median(r):.2f}，>1.3 倍占 {(r > 1.3).mean():.0%}")
+        print(f"二合一框长边 / 本图中位长轴 (two-in-one box long side / image median major): 中位 median {np.median(r):.2f}，"
+              f">1.3 倍占 share above 1.3× {(r > 1.3).mean():.0%}")
 
 
 if __name__ == "__main__":

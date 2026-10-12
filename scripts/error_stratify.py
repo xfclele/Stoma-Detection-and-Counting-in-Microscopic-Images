@@ -34,6 +34,35 @@ scripts/error_stratify.py —— 气孔漏检的「三轴解耦」诊断
 
     # 验证脚本本身是否测得准（不需要数据和 ultralytics）
     python scripts/error_stratify.py --self-test
+
+English
+-------
+scripts/error_stratify.py — "three-axis decoupling" diagnosis of missed stomata
+
+Purpose
+-------
+"Recall 0.73 for < 40 px" is the only quantified fact in the training report; the four miss types
+"defocus", "low contrast", "wide opening" and "touching" are only visual impressions, and they are
+strongly confounded with size: defocus makes stomata look larger and blurrier, while stomata in grey,
+low-contrast fields are also smaller. Before spending the scarce CPU training budget (~1 h per segment),
+we must confirm whether these factors still affect recall **within the same size bin**.
+
+Criterion (plan §0):
+    Defocus is an independent factor only if, within the same size bin, the low-sharpness group has a
+    significantly lower recall than the high-sharpness group; only then is defocus augmentation worth
+    doing. Otherwise the budget should go to small-object resolution.
+
+Outputs
+-------
+    instances.csv        one row per GT: coordinates, major axis, opening, sharpness, contrast, proximity, hit
+    predictions.csv      one row per prediction: matched or not (TP / FP)
+    stratify_report.md   cross-tables + Fisher tests + Mann-Whitney tests + Wilson confidence intervals
+
+Usage
+-----
+    # first run: inference and prediction cache (slow on CPU)
+    # afterwards: reuse the cache, all tables in seconds (--preds-json)
+    # check the script itself (no data or ultralytics needed): --self-test
 """
 
 from __future__ import annotations
@@ -50,7 +79,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 import numpy as np
 import cv2
 
-# 允许直接从仓库任意位置运行（本文件放在 scripts/ 下）
+# 允许直接从仓库任意位置运行（本文件放在 scripts/ 下） / allow running from anywhere in the repo (this file lives in scripts/)
 _HERE = Path(__file__).resolve().parent
 for _cand in (_HERE.parent, _HERE):
     if str(_cand) not in sys.path:
@@ -58,7 +87,7 @@ for _cand in (_HERE.parent, _HERE):
 
 IMG_EXTS = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp"}
 
-# 与训练报告一致的分档：<40 / 40-70 / >=70 px
+# 与训练报告一致的分档：<40 / 40-70 / >=70 px / size bins as in the training report: <40 / 40-70 / >=70 px
 DEFAULT_SIZE_BINS: List[Tuple[float, float, str]] = [
     (0.0, 40.0, "<40px"),
     (40.0, 70.0, "40-70px"),
@@ -66,24 +95,26 @@ DEFAULT_SIZE_BINS: List[Tuple[float, float, str]] = [
 ]
 
 METRICS = [
-    # (列名, 中文名, "低值组"的含义)
-    ("sharp", "局部清晰度(Laplacian方差)", "低=失焦"),
-    ("contrast", "局部对比度", "低=灰视野"),
-    ("aspect", "开口度(短轴/长轴)", "低=细缝"),
-    ("prox", "邻近度(最近邻距/长轴)", "低=粘连"),
+    # (列名, 中文名, "低值组"的含义) / (column, display name, meaning of the "low" group)
+    ("sharp", "局部清晰度(Laplacian方差) / local sharpness (Laplacian variance)", "低=失焦 / low = defocused"),
+    ("contrast", "局部对比度 / local contrast", "低=灰视野 / low = grey field"),
+    ("aspect", "开口度(短轴/长轴) / opening (minor/major)", "低=细缝 / low = narrow slit"),
+    ("prox", "邻近度(最近邻距/长轴) / proximity (nearest-neighbour distance/major)", "低=粘连 / low = touching"),
 ]
 
 
 # --------------------------------------------------------------------------- #
-# 基础工具
+# 基础工具 / basic utilities
 # --------------------------------------------------------------------------- #
 def imread_any(path: str):
-    """支持中文/空格路径的读取。"""
+    """支持中文/空格路径的读取。
+    Read images whose paths contain non-ASCII characters or spaces."""
     return cv2.imdecode(np.fromfile(path, dtype=np.uint8), cv2.IMREAD_COLOR)
 
 
 def wilson_ci(k: int, n: int, z: float = 1.96) -> Tuple[float, float]:
-    """二项比例的 Wilson 置信区间，小样本下比 normal 近似可靠。"""
+    """二项比例的 Wilson 置信区间，小样本下比 normal 近似可靠。
+    Wilson confidence interval for a binomial proportion; more reliable than the normal approximation for small samples."""
     if n <= 0:
         return (float("nan"), float("nan"))
     p = k / n
@@ -102,7 +133,7 @@ def fmt_p(p: float) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# 标签解析
+# 标签解析 / label parsing
 # --------------------------------------------------------------------------- #
 def parse_label_file(path: str, W: int, H: int):
     """
@@ -113,6 +144,12 @@ def parse_label_file(path: str, W: int, H: int):
     返回 (centers(N,2), major(N,), minor(N,))，单位均为像素。
     对 9 列格式，长/短轴由相邻角点距离的最大/最小值得到 —— 这是**旋转椭圆真实的**长短轴，
     而 load_yolo_polygon_labels() 取的是外接矩形，对旋转目标会系统性偏大，故此处自行解析。
+
+    Read YOLO labels in two formats: `cls cx cy w h` (5 columns) or `cls x1 y1 x2 y2 x3 y3 x4 y4`
+    (9 columns, normalised 4 corners). Returns (centers(N,2), major(N,), minor(N,)) in pixels.
+    For the 9-column format the major/minor axes are the max/min distances between adjacent corners —
+    the **true** axes of a rotated box — whereas load_yolo_polygon_labels() uses the bounding rectangle,
+    which overestimates rotated objects, so labels are parsed here directly.
     """
     centers, majors, minors = [], [], []
     if not path or not os.path.exists(path):
@@ -147,13 +184,15 @@ def parse_label_file(path: str, W: int, H: int):
 
 
 # --------------------------------------------------------------------------- #
-# 图像度量
+# 图像度量 / image metrics
 # --------------------------------------------------------------------------- #
 def local_metrics(gray: np.ndarray, cx: float, cy: float, radius: float,
                   g_p95: float, g_p5: float) -> Tuple[float, float]:
     """
     窗口内清晰度（Laplacian 方差）与局部对比度（归一化到全图动态范围）。
     窗口边长 = 1.5 × 长轴，即 radius = 0.75 × 长轴。
+    Sharpness (Laplacian variance) and local contrast (normalised to the image's dynamic range) in a
+    window of side 1.5 × major axis, i.e. radius = 0.75 × major axis.
     """
     H, W = gray.shape
     x0 = max(0, int(round(cx - radius)))
@@ -173,19 +212,22 @@ def local_metrics(gray: np.ndarray, cx: float, cy: float, radius: float,
 
 
 # --------------------------------------------------------------------------- #
-# 匹配
+# 匹配 / matching
 # --------------------------------------------------------------------------- #
 def match_image_mode(pred_xy: np.ndarray, gt_xy: np.ndarray, majors: np.ndarray):
     """
     模式 A（默认）：整图单一容差 tol = 0.35 × 该图中位长轴，复用已测过的
     stomata.evaluation.match_points（匈牙利一对一，重复检测计 FP）。
     与 eval_human.py 的口径一致，因此本脚本的总召回应当能复现报告的整图数字。
+    Mode A (default): one tolerance per image, tol = 0.35 × the image's median major axis, reusing the
+    tested stomata.evaluation.match_points (one-to-one Hungarian; duplicates count as FP). Intended to
+    match eval_human.py so the overall recall reproduces the report's whole-image figure.
     """
     tol = float(np.clip(0.35 * np.median(majors), 6.0, None)) if len(majors) else 12.0
     try:
         from stomata.evaluation import match_points
     except Exception:
-        # 未安装 stomata 包时的等价回退（同样是一对一匈牙利 + 固定容差）
+        # 未安装 stomata 包时的等价回退（同样是一对一匈牙利 + 固定容差） / equivalent fallback when the stomata package is not installed (also one-to-one Hungarian + fixed tolerance)
         return _hungarian_fixed_tol(pred_xy, gt_xy, tol)
 
     res = match_points(pred_xy.tolist(), gt_xy.tolist(), tol=tol)
@@ -223,6 +265,8 @@ def match_gt_mode(pred_xy: np.ndarray, gt_xy: np.ndarray, majors: np.ndarray):
     """
     模式 B：逐目标尺度相关容差 tol_i = 0.35 × 长轴_i（下限 6 px）。
     自实现匈牙利指派；用于检查结论对容差口径是否稳健。
+    Mode B: per-object, size-dependent tolerance tol_i = 0.35 × major_i (minimum 6 px), with its own
+    Hungarian assignment; used to check that conclusions are robust to the tolerance definition.
     """
     from scipy.optimize import linear_sum_assignment
     from scipy.spatial.distance import cdist
@@ -246,11 +290,12 @@ def match_gt_mode(pred_xy: np.ndarray, gt_xy: np.ndarray, majors: np.ndarray):
 
 
 # --------------------------------------------------------------------------- #
-# 分层与检验
+# 分层与检验 / stratification and tests
 # --------------------------------------------------------------------------- #
 def median_split_table(vals: np.ndarray, hit: np.ndarray, bin_mask: np.ndarray,
                        min_bin_n: int):
-    """在一个尺寸档内按中位数二分，返回 (低值组, 高值组) 的召回与 Fisher 检验。"""
+    """在一个尺寸档内按中位数二分，返回 (低值组, 高值组) 的召回与 Fisher 检验。
+    Median split within one size bin; returns recall of the (low, high) groups and a Fisher test."""
     from scipy.stats import fisher_exact
 
     m = bin_mask & np.isfinite(vals)
@@ -264,7 +309,7 @@ def median_split_table(vals: np.ndarray, hit: np.ndarray, bin_mask: np.ndarray,
         return None
     k_lo, n_lo = int(h[lo].sum()), int(lo.sum())
     k_hi, n_hi = int(h[hi].sum()), int(hi.sum())
-    # 2x2: 行=低/高值组, 列=命中/漏检
+    # 2x2: 行=低/高值组, 列=命中/漏检 / 2x2: rows = low/high group, columns = hit/miss
     table = [[k_lo, n_lo - k_lo], [k_hi, n_hi - k_hi]]
     _, p = fisher_exact(table)
     return {
@@ -275,7 +320,8 @@ def median_split_table(vals: np.ndarray, hit: np.ndarray, bin_mask: np.ndarray,
 
 
 def mannwhitney_table(vals: np.ndarray, hit: np.ndarray):
-    """不做分档，直接比较命中组与漏检组的分布（Mann-Whitney U，双侧）。"""
+    """不做分档，直接比较命中组与漏检组的分布（Mann-Whitney U，双侧）。
+    Without binning, compare the distributions of hit and missed objects (two-sided Mann-Whitney U)."""
     from scipy.stats import mannwhitneyu
 
     a = vals[hit & np.isfinite(vals)]
@@ -291,7 +337,7 @@ def mannwhitney_table(vals: np.ndarray, hit: np.ndarray):
 
 
 # --------------------------------------------------------------------------- #
-# 主分析
+# 主分析 / main analysis
 # --------------------------------------------------------------------------- #
 def analyze(items: List[Tuple[str, str, str]], preds: Dict[str, list],
             out_dir: Path, size_bins, min_bin_n: int, tol_mode: str,
@@ -304,7 +350,7 @@ def analyze(items: List[Tuple[str, str, str]], preds: Dict[str, list],
     for stem, img_path, lbl_path in items:
         img = imread_any(img_path)
         if img is None:
-            print(f"[warn] 无法读取图像: {img_path}")
+            print(f"[warn] 无法读取图像 / cannot read image: {img_path}")
             continue
         H, W = img.shape[:2]
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
@@ -316,7 +362,7 @@ def analyze(items: List[Tuple[str, str, str]], preds: Dict[str, list],
         if n_gt == 0:
             continue
 
-        # --- GT 侧度量 ---
+        # --- GT 侧度量 --- / GT-side metrics ---
         aspect = np.where(majors > 1e-6, minors / np.maximum(majors, 1e-6), np.nan)
         sharp = np.full(n_gt, np.nan)
         contrast = np.full(n_gt, np.nan)
@@ -325,7 +371,7 @@ def analyze(items: List[Tuple[str, str, str]], preds: Dict[str, list],
             sharp[i] = s
             contrast[i] = c
 
-        # 邻近度：最近邻 GT 中心距 / 长轴
+        # 邻近度：最近邻 GT 中心距 / 长轴 / proximity: nearest GT centre distance / major axis
         if n_gt > 1:
             from scipy.spatial.distance import cdist
             D = cdist(centers, centers)
@@ -337,7 +383,7 @@ def analyze(items: List[Tuple[str, str, str]], preds: Dict[str, list],
         med_sharp = float(np.nanmedian(sharp)) if np.isfinite(sharp).any() else float("nan")
         sharp_rel = sharp / med_sharp if med_sharp and med_sharp > 1e-9 else np.full(n_gt, np.nan)
 
-        # --- 预测 ---
+        # --- 预测 --- / predictions ---
         p = np.array(preds.get(stem, []), float).reshape(-1, 5)
         if len(p):
             pxy = np.stack([(p[:, 0] + p[:, 2]) / 2, (p[:, 1] + p[:, 3]) / 2], axis=1)
@@ -379,9 +425,10 @@ def analyze(items: List[Tuple[str, str, str]], preds: Dict[str, list],
         })
 
     if not rows:
-        raise RuntimeError("没有解析到任何 GT，请检查 --images / --labels 路径与 --exclude。")
+        raise RuntimeError("没有解析到任何 GT，请检查 --images / --labels 路径与 --exclude。 / "
+                           "No GT parsed; check the --images / --labels paths and --exclude.")
 
-    # 汇总为数组
+    # 汇总为数组 / collect into arrays
     def col(name, dtype=float):
         return np.array([(float(r[name]) if r[name] != "" else np.nan) for r in rows], dtype)
 
@@ -395,7 +442,7 @@ def analyze(items: List[Tuple[str, str, str]], preds: Dict[str, list],
         "sharp_rel": col("sharp_rel"),
     }
 
-    # ---------------- 写 CSV ----------------
+    # ---------------- 写 CSV ---------------- / write CSV ----------------
     with open(out_dir / "instances.csv", "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
         w.writeheader()
@@ -410,22 +457,26 @@ def analyze(items: List[Tuple[str, str, str]], preds: Dict[str, list],
         w.writeheader()
         w.writerows(per_image)
 
-    # ---------------- 报表 ----------------
+    # ---------------- 报表 ---------------- / report ----------------
     L: List[str] = []
     A = L.append
-    A("# 气孔漏检三轴解耦诊断\n")
-    A(f"- GT 总数：**{len(rows)}**，命中 {int(hit.sum())}，整体召回 **{hit.mean():.3f}**")
-    A(f"- 匹配容差模式：`{tol_mode}`")
+    A("# 气孔漏检三轴解耦诊断 / Three-axis decoupling diagnosis of missed stomata\n")
+    A(f"- GT 总数 / total：**{len(rows)}**，命中 / hits {int(hit.sum())}，整体召回 / overall recall **{hit.mean():.3f}**")
+    A(f"- 匹配容差模式 / tolerance mode：`{tol_mode}`")
     A("")
     A("> **怎么读这张表**：在每个尺寸档内按中位数二分。只有当同一尺寸档内，"
       "「差」的那一半召回**显著**低于「好」的那一半（Fisher p 小），"
       "该因子才算被证实为独立漏检原因，值得为它单独做增强。")
+    A("> **How to read the tables**: each size bin is split at the median. A factor is confirmed as an "
+      "independent cause of misses only if, within the same size bin, the \"bad\" half has a **significantly** "
+      "lower recall than the \"good\" half (small Fisher p); only then is a dedicated augmentation worthwhile.")
     A("> 多重比较：4 个指标 × 3 个尺寸档 = 12 次检验，Bonferroni 校正后阈值约 p < 0.0042。")
+    A("> Multiple comparisons: 4 metrics × 3 size bins = 12 tests; the Bonferroni-corrected threshold is about p < 0.0042.")
     A("")
 
-    # 总览：按尺寸档
-    A("## 1. 按尺寸档的召回（与训练报告口径对齐）\n")
-    A("| 尺寸档 | n | 命中 | 召回 | 95% Wilson CI |")
+    # 总览：按尺寸档 / overview by size bin
+    A("## 1. 按尺寸档的召回（与训练报告口径对齐） / Recall by size bin (as in the training report)\n")
+    A("| 尺寸档 size bin | n | 命中 hits | 召回 recall | 95% Wilson CI |")
     A("|---|---|---|---|---|")
     for lo, hi, name in size_bins:
         m = (major >= lo) & (major < hi)
@@ -437,38 +488,38 @@ def analyze(items: List[Tuple[str, str, str]], preds: Dict[str, list],
         A(f"| {name} | {n} | {k} | {k/n:.3f} | [{a:.3f}, {b:.3f}] |")
     A("")
 
-    # 逐指标：分档内中位数二分 + Fisher
-    A("## 2. 尺寸档内二分：因子是否独立影响召回\n")
+    # 逐指标：分档内中位数二分 + Fisher / per metric: median split within bins + Fisher
+    A("## 2. 尺寸档内二分：因子是否独立影响召回 / Within-bin split: does the factor independently affect recall?\n")
     for key, cn, lo_note in METRICS:
         A(f"### {cn}　（{lo_note}）\n")
-        A("| 尺寸档 | 低值组 召回 (n) | 高值组 召回 (n) | 差值 | Fisher p |")
+        A("| 尺寸档 size bin | 低值组 召回 low-group recall (n) | 高值组 召回 high-group recall (n) | 差值 diff | Fisher p |")
         A("|---|---|---|---|---|")
         for blo, bhi, bname in size_bins:
             m = (major >= blo) & (major < bhi)
             r = median_split_table(vals[key], hit, m, min_bin_n)
             if r is None:
-                A(f"| {bname} | — | — | — | 样本不足（<{min_bin_n}） |")
+                A(f"| {bname} | — | — | — | 样本不足 / too few（<{min_bin_n}） |")
                 continue
             A(f"| {bname} | {r['rec_lo']:.3f} ({r['n_lo']}) | {r['rec_hi']:.3f} ({r['n_hi']}) "
               f"| {r['diff']:+.3f} | {fmt_p(r['p'])} |")
         A("")
 
-    # 不分档的 Mann-Whitney
-    A("## 3. 不分档：命中组 vs 漏检组的分布差异（Mann-Whitney U，双侧）\n")
-    A("| 指标 | 命中组中位数 | 漏检组中位数 | p |")
+    # 不分档的 Mann-Whitney / Mann-Whitney without binning
+    A("## 3. 不分档：命中组 vs 漏检组的分布差异（Mann-Whitney U，双侧） / No binning: hit vs missed distributions (two-sided Mann-Whitney U)\n")
+    A("| 指标 metric | 命中组中位数 hit median | 漏检组中位数 miss median | p |")
     A("|---|---|---|---|")
-    for key, cn, _ in METRICS + [("sharp_rel", "相对清晰度(窗口/本图中位)", "低=局部失焦")]:
+    for key, cn, _ in METRICS + [("sharp_rel", "相对清晰度(窗口/本图中位) / relative sharpness (window/image median)", "低=局部失焦 / low = locally defocused")]:
         r = mannwhitney_table(vals[key], hit)
         if r is None:
-            A(f"| {cn} | — | — | 样本不足 |")
+            A(f"| {cn} | — | — | 样本不足 / too few |")
             continue
         A(f"| {cn} | {r['med_hit']:.3g} (n={r['n_hit']}) | {r['med_miss']:.3g} (n={r['n_miss']}) "
           f"| {fmt_p(r['p'])} |")
     A("")
 
-    # 每图召回
-    A(f"## 4. 召回最低的 {min(top_images, len(per_image))} 张图\n")
-    A("| 图像 | GT 数 | 命中 | 召回 | 中位长轴 | 中位清晰度 |")
+    # 每图召回 / per-image recall
+    A(f"## 4. 召回最低的图 / Images with the lowest recall (top {min(top_images, len(per_image))})\n")
+    A("| 图像 image | GT 数 GT | 命中 hits | 召回 recall | 中位长轴 median major | 中位清晰度 median sharpness |")
     A("|---|---|---|---|---|---|")
     for r in sorted(per_image, key=lambda r: r["recall"])[:top_images]:
         A(f"| {r['image']} | {r['n_gt']} | {r['tp']} | {r['recall']:.3f} "
@@ -484,7 +535,7 @@ def analyze(items: List[Tuple[str, str, str]], preds: Dict[str, list],
 
 
 # --------------------------------------------------------------------------- #
-# 预测：缓存 / 推理
+# 预测：缓存 / 推理 / predictions: cache / inference
 # --------------------------------------------------------------------------- #
 def load_preds_json(path: str) -> Dict[str, list]:
     with open(path, "r", encoding="utf-8") as f:
@@ -508,12 +559,12 @@ def infer_preds(items, weights: str, conf: float, tile: int, overlap: float,
         dets = sp(img)
         out[stem] = [[float(d.x0), float(d.y0), float(d.x1), float(d.y1), float(d.score)]
                      for d in dets]
-        print(f"  [{i}/{len(items)}] {stem}: {len(out[stem])} 个预测", flush=True)
+        print(f"  [{i}/{len(items)}] {stem}: {len(out[stem])} 个预测 / predictions", flush=True)
     if save:
         Path(save).parent.mkdir(parents=True, exist_ok=True)
         with open(save, "w", encoding="utf-8") as f:
             json.dump(out, f)
-        print(f"预测已缓存 → {save}")
+        print(f"预测已缓存 / predictions cached → {save}")
     return out
 
 
@@ -533,10 +584,11 @@ def collect_items(images_dir: str, labels_dir: str, exclude: Sequence[str],
 
 
 # --------------------------------------------------------------------------- #
-# 自检：合成数据上验证脚本确实测得准
+# 自检：合成数据上验证脚本确实测得准 / self-test: verify on synthetic data that the script measures correctly
 # --------------------------------------------------------------------------- #
 def run_self_test(out_root: Path) -> int:
-    """构造合成数据集，植入「失焦→更容易漏检」的效应，验证脚本能把它检出来。"""
+    """构造合成数据集，植入「失焦→更容易漏检」的效应，验证脚本能把它检出来。
+    Build a synthetic dataset with a planted "defocus → more misses" effect and check that the script detects it."""
     rng = np.random.default_rng(0)
     root = out_root / "selftest"
     idir, ldir = root / "images", root / "labels"
@@ -549,7 +601,7 @@ def run_self_test(out_root: Path) -> int:
 
     for i in range(N_IMG):
         img = np.full((H, W), 140, np.uint8)
-        # 背景：平滑噪声纹理 + 叶脉暗线
+        # 背景：平滑噪声纹理 + 叶脉暗线 / background: smooth noise texture + dark vein lines
         tex = cv2.GaussianBlur(rng.normal(140, 18, (H, W)).astype(np.float32), (0, 0), 9)
         img = np.clip(tex, 0, 255).astype(np.uint8)
         for _ in range(3):
@@ -564,13 +616,13 @@ def run_self_test(out_root: Path) -> int:
             cx, cy = float(rng.uniform(60, W - 60)), float(rng.uniform(60, H - 60))
             ang = float(rng.uniform(0, 180))
             a, b = major / 2, minor / 2
-            # 保卫细胞亮环 + 中央暗孔
+            # 保卫细胞亮环 + 中央暗孔 / bright guard-cell ring + dark central pore
             cv2.ellipse(img, (int(cx), int(cy)), (int(a), int(b)), ang, 0, 360, 215, 2)
             cv2.ellipse(img, (int(cx), int(cy)), (int(a * 0.30), int(b * 0.30)), ang, 0, 360, 55, -1)
             blurred = bool(rng.random() < 0.5)
             recs.append((cx, cy, major, minor, ang, blurred))
 
-        # 植入失焦：对局部邻域做高斯模糊 + 轻微降对比
+        # 植入失焦：对局部邻域做高斯模糊 + 轻微降对比 / plant defocus: Gaussian blur of the local neighbourhood + slight contrast loss
         for (cx, cy, major, minor, ang, blurred) in recs:
             if not blurred:
                 continue
@@ -583,7 +635,7 @@ def run_self_test(out_root: Path) -> int:
         stem = f"syn_{i:02d}"
         cv2.imwrite(str(idir / f"{stem}.png"), img)
 
-        # 标签：归一化 4 角点
+        # 标签：归一化 4 角点 / labels: normalised 4 corners
         lines = []
         for (cx, cy, major, minor, ang, blurred) in recs:
             a, b, t = major / 2, minor / 2, math.radians(ang)
@@ -593,7 +645,7 @@ def run_self_test(out_root: Path) -> int:
             lines.append("0 " + " ".join(f"{v:.6f}" for v in flat.ravel()))
         (ldir / f"{stem}.txt").write_text("\n".join(lines), encoding="utf-8")
 
-        # 植入预测：失焦者命中率显著降低，另加少量 FP
+        # 植入预测：失焦者命中率显著降低，另加少量 FP / plant predictions: much lower hit rate for defocused objects, plus a few FPs
         preds = []
         for (cx, cy, major, minor, ang, blurred) in recs:
             base = 0.95 if major >= 40 else 0.80
@@ -616,51 +668,52 @@ def run_self_test(out_root: Path) -> int:
     res = analyze(items, truth, root, DEFAULT_SIZE_BINS, min_bin_n=10,
                   tol_mode="image", top_images=6)
 
-    # 判定：脚本应当在「清晰度」这一行检出显著差距
+    # 判定：脚本应当在「清晰度」这一行检出显著差距 / verdict: the script should find a significant gap in the sharpness row
     import re
     txt = (root / "stratify_report.md").read_text(encoding="utf-8")
     sec = txt.split("### 局部清晰度")[1].split("###")[0]
     ps = [float(m) for m in re.findall(r"(?<![\d.])(0\.\d+|<1e-4)", sec) if m != "<1e-4"]
     ok_sig = any(p < 0.05 for p in ps) or "<1e-4" in sec
 
-    print("\n=== 自检结果 ===")
-    print(f"合成 GT: {res['n_gt']}，整体召回: {res['recall']:.3f}")
+    print("\n=== 自检结果 / self-test result ===")
+    print(f"合成 GT / synthetic GT: {res['n_gt']}，整体召回 / overall recall: {res['recall']:.3f}")
     print(sec.strip())
-    print("\n判定：植入的「失焦 → 漏检」效应是否被检出 →", "PASS" if ok_sig else "FAIL")
-    print(f"完整报表: {res['report']}")
+    print("\n判定：植入的「失焦 → 漏检」效应是否被检出 / was the planted defocus → miss effect detected? →", "PASS" if ok_sig else "FAIL")
+    print(f"完整报表 / full report: {res['report']}")
     return 0 if ok_sig else 1
 
 
 # --------------------------------------------------------------------------- #
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
-        description="气孔漏检三轴解耦诊断（失焦 / 低对比 / 开口度 / 粘连 vs 尺寸）",
+        description="气孔漏检三轴解耦诊断（失焦 / 低对比 / 开口度 / 粘连 vs 尺寸） / three-axis diagnosis of missed stomata (defocus / low contrast / opening / touching vs size)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    ap.add_argument("--images", help="图像目录")
-    ap.add_argument("--labels", help="标签目录（与图像同 stem 的 .txt）")
-    ap.add_argument("--weights", help="模型权重；提供 --preds-json 时可省略")
-    ap.add_argument("--preds-json", help="复用缓存的预测 JSON")
-    ap.add_argument("--save-preds", help="把推理结果缓存到该 JSON")
-    ap.add_argument("--conf", type=float, default=0.40, help="推理置信度（默认 0.40）")
+    ap.add_argument("--images", help="图像目录 / image directory")
+    ap.add_argument("--labels", help="标签目录（与图像同 stem 的 .txt） / label directory (.txt with the same stem as the image)")
+    ap.add_argument("--weights", help="模型权重；提供 --preds-json 时可省略 / model weights; optional when --preds-json is given")
+    ap.add_argument("--preds-json", help="复用缓存的预测 JSON / reuse a cached prediction JSON")
+    ap.add_argument("--save-preds", help="把推理结果缓存到该 JSON / cache inference results to this JSON")
+    ap.add_argument("--conf", type=float, default=0.40, help="推理置信度（默认 0.40） / inference confidence (default 0.40)")
     ap.add_argument("--tile", type=int, default=640)
     ap.add_argument("--overlap", type=float, default=0.2)
     ap.add_argument("--device", default="cpu")
     ap.add_argument("--tol-mode", choices=["image", "gt"], default="image",
                     help="image=整图统一容差(与 eval_human 口径一致, 默认); "
-                         "gt=逐目标 0.35×长轴")
+                         "gt=逐目标 0.35×长轴 / "
+                         "image = one tolerance per image (default); gt = per-object 0.35 × major axis")
     ap.add_argument("--size-bins", default="0,40,70,inf",
-                    help="尺寸分档边界，默认 0,40,70,inf")
+                    help="尺寸分档边界，默认 0,40,70,inf / size-bin edges, default 0,40,70,inf")
     ap.add_argument("--min-bin-n", type=int, default=10,
-                    help="尺寸档内少于该样本数则跳过二分检验")
+                    help="尺寸档内少于该样本数则跳过二分检验 / skip the split test in bins with fewer samples than this")
     ap.add_argument("--exclude", nargs="*", default=["118.2", "221.2"],
-                    help="排除的图像 stem（默认排除 118.2/221.2：伪标签污染 / 标注不全）")
-    ap.add_argument("--include-all", action="store_true", help="不排除任何图像")
-    ap.add_argument("--limit", type=int, default=0, help="只处理前 N 张（调试用）")
+                    help="排除的图像 stem（默认排除 118.2/221.2：伪标签污染 / 标注不全） / image stems to exclude (default 118.2/221.2: pseudo-label contamination / incomplete labels)")
+    ap.add_argument("--include-all", action="store_true", help="不排除任何图像 / exclude no images")
+    ap.add_argument("--limit", type=int, default=0, help="只处理前 N 张（调试用） / process only the first N images (debugging)")
     ap.add_argument("--top-images", type=int, default=10)
     ap.add_argument("--out", default="outputs_dl/stratify")
     ap.add_argument("--self-test", action="store_true",
-                    help="在合成数据上验证脚本本身（不需要真实数据和 ultralytics）")
+                    help="在合成数据上验证脚本本身（不需要真实数据和 ultralytics） / validate the script on synthetic data (no real data or ultralytics needed)")
     args = ap.parse_args(argv)
 
     out_dir = Path(args.out)
@@ -669,7 +722,7 @@ def main(argv=None) -> int:
         return run_self_test(out_dir)
 
     if not args.images or not args.labels:
-        ap.error("需要 --images 与 --labels（或用 --self-test）")
+        ap.error("需要 --images 与 --labels（或用 --self-test） / --images and --labels are required (or use --self-test)")
 
     bins = []
     edges = [float(x) for x in args.size_bins.split(",")]
@@ -680,23 +733,23 @@ def main(argv=None) -> int:
 
     exclude = [] if args.include_all else list(args.exclude)
     items = collect_items(args.images, args.labels, exclude, args.limit)
-    print(f"共 {len(items)} 张图" + (f"，排除 {exclude}" if exclude else ""))
+    print(f"共 {len(items)} 张图 / images" + (f"，排除 / excluded {exclude}" if exclude else ""))
 
     if args.preds_json:
         preds = load_preds_json(args.preds_json)
-        print(f"复用缓存预测: {args.preds_json}")
+        print(f"复用缓存预测 / reusing cached predictions: {args.preds_json}")
     else:
         if not args.weights:
-            ap.error("需要 --weights 或 --preds-json")
-        print(f"开始推理（conf={args.conf}, tile={args.tile}, overlap={args.overlap}）…")
+            ap.error("需要 --weights 或 --preds-json / --weights or --preds-json is required")
+        print(f"开始推理 / running inference（conf={args.conf}, tile={args.tile}, overlap={args.overlap}）…")
         preds = infer_preds(items, args.weights, args.conf, args.tile,
                             args.overlap, args.device, args.save_preds)
 
     res = analyze(items, preds, out_dir, bins, args.min_bin_n,
                   args.tol_mode, args.top_images)
-    print(f"\nGT {res['n_gt']}，命中 {res['n_hit']}，整体召回 {res['recall']:.3f}")
-    print(f"报表: {res['report']}")
-    print(f"明细: {out_dir/'instances.csv'}  {out_dir/'predictions.csv'}  {out_dir/'per_image.csv'}")
+    print(f"\nGT {res['n_gt']}，命中 / hits {res['n_hit']}，整体召回 / overall recall {res['recall']:.3f}")
+    print(f"报表 / report: {res['report']}")
+    print(f"明细 / details: {out_dir/'instances.csv'}  {out_dir/'predictions.csv'}  {out_dir/'per_image.csv'}")
     return 0
 
 

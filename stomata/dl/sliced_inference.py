@@ -1,18 +1,32 @@
 """阶段二 · 切片辅助推理 (SAHI, Slicing Aided Hyper Inference)。
+Stage 2 · sliced inference (SAHI, Slicing Aided Hyper Inference).
 
-核心机制
---------
+核心机制 / Mechanism
+--------------------
 1. 把大图切成与训练一致的 640×640 重叠切片（overlap 20%），每片在 *原始分辨率* 上推理，
    ~35 px 的气孔在网络眼中仍是 ~35 px（而不是整图缩放后的 ~11 px）；
+   Cut the large image into 640×640 overlapping tiles (20% overlap) as in training and run each at
+   *original resolution*, so a ~35 px stoma is still ~35 px to the network (not ~11 px after downscaling).
 2. 可选再做一次整图低分辨率推理（standard prediction），补充跨越多片的大目标；
+   Optionally add a low-resolution whole-image pass (standard prediction) for large objects spanning tiles.
 3. 把各片预测平移回全图坐标，用 NMS / NMM（Non-Maximum Merging）按
    IoS (Intersection over Smaller) 合并重叠区内的重复框 —— 被切片边界截断的半个气孔
    与相邻片中完整的该气孔 IoS 很高，会被合并为一个，从而消除边界重复计数。
+   Shift tile predictions back to image coordinates and merge duplicates in overlaps with NMS / NMM
+   (Non-Maximum Merging) using IoS (Intersection over Smaller): half a stoma cut by a tile border has a
+   high IoS with the complete stoma in the neighbouring tile, so the two are merged and the border
+   duplicate disappears.
 
 本模块提供两条路径：
-    · predict_with_sahi()        —— 调用官方 sahi 库（推荐）
+This module offers two paths:
     · SlicedPredictor            —— 无 sahi 依赖的等价实现（任何 "tile → boxes" 的检测器都可接入），
                                      额外支持"中心归属"去重：每个框只由其中心所在切片的核心区负责。
+                                     默认方案（见 docs/SAHI_COMPARISON.md）。
+                                     dependency-free equivalent (any "tile → boxes" detector plugs in), with
+                                     extra "centre ownership" de-duplication: each box belongs only to the
+                                     tile whose core contains its centre. Default (see docs/SAHI_COMPARISON.md).
+    · predict_with_sahi()        —— 调用官方 sahi 库（可选）
+                                     calls the official sahi library (optional)
 """
 from __future__ import annotations
 
@@ -38,12 +52,14 @@ class BoxDetection:
 
     @property
     def major_px(self):
-        """轴对齐框估计长轴：正方形框（点标注生成）时 ≈ 长轴×pad；OBB 模型请直接使用其长边。"""
+        """轴对齐框估计长轴：正方形框（点标注生成）时 ≈ 长轴×pad；OBB 模型请直接使用其长边。
+        Major axis from an axis-aligned box: ≈ major×pad for point-derived squares; for OBB models use the long side directly."""
         return max(self.x1 - self.x0, self.y1 - self.y0)
 
 
 def ios_matrix(a: np.ndarray, b: np.ndarray) -> np.ndarray:
-    """IoS = 交集面积 / 较小框面积。对"被截断的半框 vs 完整框"比 IoU 更敏感。"""
+    """IoS = 交集面积 / 较小框面积。对"被截断的半框 vs 完整框"比 IoU 更敏感。
+    IoS = intersection / area of the smaller box; more sensitive than IoU for "truncated half box vs complete box"."""
     ix0 = np.maximum(a[:, None, 0], b[None, :, 0])
     iy0 = np.maximum(a[:, None, 1], b[None, :, 1])
     ix1 = np.minimum(a[:, None, 2], b[None, :, 2])
@@ -69,10 +85,13 @@ def greedy_nms_ios(boxes: np.ndarray, scores: np.ndarray, thr: float = 0.5) -> n
 
 class SlicedPredictor:
     """无外部依赖的 SAHI 等价实现。
+    Dependency-free equivalent of SAHI.
 
     predict_tile: Callable[[np.ndarray], np.ndarray]
         输入切片 (h, w, 3)，返回 (K, 5) 数组 [x0, y0, x1, y1, score]（切片坐标）。
         例如包装 Ultralytics::
+        Takes a tile (h, w, 3) and returns a (K, 5) array [x0, y0, x1, y1, score] in tile coordinates,
+        e.g. wrapping Ultralytics::
 
             model = YOLO("runs/detect/stoma/weights/best.pt")
             def predict_tile(tile):
@@ -99,6 +118,8 @@ class SlicedPredictor:
             if self.merge == "center":
                 # 中心归属：只保留中心落在本切片"核心区"的框。核心区 = 切片去掉与邻片重叠的一半，
                 # 相邻切片的核心区恰好无缝、不重叠地铺满整图 ⇒ 每个目标只被计数一次。
+                # Centre ownership: keep only boxes whose centre is in this tile's core (the tile minus half
+                # of each overlap). The cores tile the image without gaps or overlaps ⇒ each object counts once.
                 cx, cy = (pred[:, 0] + pred[:, 2]) / 2, (pred[:, 1] + pred[:, 3]) / 2
                 cx0, cy0, cx1, cy1 = self._core(x0, y0, x1, y1, wins)
                 pred = pred[(cx >= cx0) & (cx < cx1) & (cy >= cy0) & (cy < cy1)]
@@ -106,12 +127,13 @@ class SlicedPredictor:
         if not all_boxes:
             return []
         P = np.vstack(all_boxes)
-        keep = greedy_nms_ios(P[:, :4], P[:, 4], self.ios_thr)  # 两种模式都再做一次全局 IoS-NMS 兜底
+        keep = greedy_nms_ios(P[:, :4], P[:, 4], self.ios_thr)  # 两种模式都再做一次全局 IoS-NMS 兜底 / both modes finish with a global IoS-NMS safety net
         return [BoxDetection(*P[i]) for i in keep]
 
     @staticmethod
     def _core(x0, y0, x1, y1, wins):
-        """该切片的核心区：与相邻切片重叠部分各分一半。"""
+        """该切片的核心区：与相邻切片重叠部分各分一半。
+        Core of this tile: each overlap with a neighbour is split in half."""
         xs = sorted({w[0] for w in wins})
         ys = sorted({w[1] for w in wins})
         xe = {w[0]: w[2] for w in wins}
@@ -125,7 +147,8 @@ class SlicedPredictor:
 
 
 def load_sahi_model(weights: str, conf: float = 0.25, device: str = "cuda:0", image_size: int = 640):
-    """加载 SAHI 检测模型；批量推理时只加载一次，传给 predict_with_sahi(model=...)。"""
+    """加载 SAHI 检测模型；批量推理时只加载一次，传给 predict_with_sahi(model=...)。
+    Load a SAHI detection model once for batch inference and pass it to predict_with_sahi(model=...)."""
     from sahi import AutoDetectionModel
 
     return AutoDetectionModel.from_pretrained(model_type="ultralytics", model_path=weights,
@@ -136,22 +159,23 @@ def predict_with_sahi(image, weights: Optional[str] = None, tile: int = 640, ove
                       device: str = "cuda:0", postprocess: str = "GREEDYNMM", match_metric: str = "IOS",
                       match_threshold: float = 0.5, standard_pred: bool = False, model=None,
                       force_postprocess: bool = True) -> list[BoxDetection]:
-    """官方 SAHI 路径（pip install sahi ultralytics）。image 可为路径或 BGR 数组。"""
+    """官方 SAHI 路径（pip install sahi ultralytics）。image 可为路径或 BGR 数组。
+    Official SAHI path (pip install sahi ultralytics); image may be a path or a BGR array."""
     from sahi.predict import get_sliced_prediction
 
     if model is None:
         model = load_sahi_model(weights, conf, device)
     if isinstance(image, np.ndarray):
-        image = image[:, :, ::-1].copy()                 # SAHI 期望 RGB 数组
+        image = image[:, :, ::-1].copy()                 # SAHI 期望 RGB 数组 / SAHI expects an RGB array
     res = get_sliced_prediction(
         image, model,
         slice_height=tile, slice_width=tile,
         overlap_height_ratio=overlap, overlap_width_ratio=overlap,
-        perform_standard_pred=standard_pred,            # 气孔很小，整图预测通常只带来误检，默认关闭
-        postprocess_type=postprocess,                    # GREEDYNMM：合并而非简单丢弃重叠框
-        postprocess_match_metric=match_metric,           # IOS：对切片边界截断的半框更鲁棒
+        perform_standard_pred=standard_pred,            # 气孔很小，整图预测通常只带来误检，默认关闭 / stomata are small; a whole-image pass mostly adds FPs, off by default
+        postprocess_type=postprocess,                    # GREEDYNMM：合并而非简单丢弃重叠框 / GREEDYNMM merges overlapping boxes instead of discarding
+        postprocess_match_metric=match_metric,           # IOS：对切片边界截断的半框更鲁棒 / IOS is more robust for half boxes cut by tile borders
         postprocess_match_threshold=match_threshold,
-        force_postprocess_type=force_postprocess,        # 否则模型阈值低时 SAHI 会自动改用 NMS/IOU
+        force_postprocess_type=force_postprocess,        # 否则模型阈值低时 SAHI 会自动改用 NMS/IOU / otherwise SAHI silently switches to NMS/IOU at low model thresholds
         verbose=0,
     )
     out = []
@@ -162,7 +186,8 @@ def predict_with_sahi(image, weights: Optional[str] = None, tile: int = 640, ove
 
 
 def ultralytics_tile_predictor(weights: str, conf: float = 0.25, imgsz: int = 640, device: Optional[str] = None):
-    """把 Ultralytics YOLO 权重包装为 SlicedPredictor 需要的 predict_tile 函数。"""
+    """把 Ultralytics YOLO 权重包装为 SlicedPredictor 需要的 predict_tile 函数。
+    Wrap Ultralytics YOLO weights as the predict_tile function expected by SlicedPredictor."""
     from ultralytics import YOLO
 
     model = YOLO(weights)

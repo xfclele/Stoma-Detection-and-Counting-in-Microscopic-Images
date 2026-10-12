@@ -1,6 +1,7 @@
 {
  "image": "test001.tif",
  "note": "人工目视核验的局部矩形区域（非全图）。20x 物镜彩色图，气孔长轴约 50–65 px。",
+ "note_en": "Manually verified local rectangular region (not the whole image). 20x objective colour image; stoma major axis about 50–65 px.",
  "regions": [
   {"name": "center", "box": [300, 150, 750, 480],
    "points": [[328, 190], [530, 165], [656, 217], [337, 268], [489, 284], [370, 328], [689, 326], [401, 389], [576, 382], [656, 452]],

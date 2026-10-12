@@ -24,18 +24,19 @@ def test_sliced_predictor_counts_each_object_once(merge):
     rng = np.random.default_rng(1)
     W, H = 1500, 1100
     pts = []
-    while len(pts) < 300:  # 真实气孔互不重叠：最小间距 40 px
+    while len(pts) < 300:  # 真实气孔互不重叠：最小间距 40 px / real stomata do not overlap: minimum spacing 40 px
         q = rng.uniform([20, 20], [W - 20, H - 20])
         if all(np.hypot(*(q - p)) > 40 for p in pts):
             pts.append(q)
     pts = np.array(pts)
     boxes = points_to_boxes(pts, default_major=36, pad=1.0)
-    # 每个像素存放其全局坐标 (x, y)，预测函数据此得知切片位置
+    # 每个像素存放其全局坐标 (x, y)，预测函数据此得知切片位置 / each pixel stores its global (x, y), so the predictor knows the tile position
     yy, xx = np.mgrid[0:H, 0:W]
     img = np.stack([xx, yy], -1).astype(np.int32)
 
     def predict_tile(tile):
-        """模拟完美检测器：返回切片内可见面积 ≥ 30% 的目标（含被切片边界截断者）。"""
+        """模拟完美检测器：返回切片内可见面积 ≥ 30% 的目标（含被切片边界截断者）。
+        Simulated perfect detector: returns objects with ≥ 30% visible area in the tile (including truncated ones)."""
         x0, y0 = int(tile[0, 0, 0]), int(tile[0, 0, 1])
         th, tw = tile.shape[:2]
         b = boxes.copy()
@@ -64,7 +65,7 @@ def test_build_dataset_single_image(tmp_path):
     n_val = len(list((tmp_path / "ds/labels/val").iterdir()))
     assert n_train > 0 and n_val > 0
     assert open(y).read().count("stoma") == 1
-    # 标签格式：cls cx cy w h，均归一化到 [0, 1]
+    # 标签格式：cls cx cy w h，均归一化到 [0, 1] / label format: cls cx cy w h, all normalised to [0, 1]
     for f in (tmp_path / "ds/labels/train").iterdir():
         for line in f.read_text().splitlines():
             v = [float(t) for t in line.split()]
@@ -77,18 +78,18 @@ def test_build_dataset_with_mask(tmp_path):
     from stomata.dl import PointAnnotation, build_yolo_dataset
 
     img = np.full((1280, 1280, 3), 200, np.uint8)
-    img[:, 640:] = 30                        # 右半边是"未标注区域"
+    img[:, 640:] = 30                        # 右半边是"未标注区域" / the right half is the "unlabelled area"
     p = tmp_path / "a.png"
     cv2.imwrite(str(p), img)
     mask = np.zeros((1280, 1280), np.uint8)
     mask[:, :640] = 255
     mp = tmp_path / "m.png"
     cv2.imwrite(str(mp), mask)
-    pts = np.array([[100.0, 100.0], [300.0, 500.0], [900.0, 300.0]])   # 第三个点在掩膜外
+    pts = np.array([[100.0, 100.0], [300.0, 500.0], [900.0, 300.0]])   # 第三个点在掩膜外 / the third point is outside the mask
     out = tmp_path / "ds"
     build_yolo_dataset([PointAnnotation(str(p), pts, None, str(mp))], str(out), keep_empty=1.0, overlap=0.0,
                        min_valid_frac=0.3)
     names = sorted(f.stem for f in (out / "labels/train").iterdir()) + sorted(f.stem for f in (out / "labels/val").iterdir())
-    assert all(int(n.split("_")[1]) < 640 for n in names)          # 全掩膜的右侧切片被丢弃
+    assert all(int(n.split("_")[1]) < 640 for n in names)          # 全掩膜的右侧切片被丢弃 / fully masked right-hand tiles are dropped
     n_boxes = sum(len(f.read_text().splitlines()) for d in ("train", "val") for f in (out / "labels" / d).iterdir())
-    assert n_boxes == 2                                             # 掩膜外的点不生成框
+    assert n_boxes == 2                                             # 掩膜外的点不生成框 / no box for points outside the mask

@@ -1,4 +1,5 @@
-"""可视化：流水线对比多子图 + 检测结果叠加图。"""
+"""可视化：流水线对比多子图 + 检测结果叠加图。
+Visualisation: pipeline comparison panels + detection overlay."""
 from __future__ import annotations
 
 from typing import Optional, Sequence
@@ -12,7 +13,8 @@ from .preprocessing import to_gray_float
 
 def draw_detections(image: np.ndarray, result: DetectionResult, show_rejected: bool = False,
                     thickness: int = 2, label: bool = False) -> np.ndarray:
-    """在 BGR 图上画出检测椭圆（红）与可选的被拒候选（黄色小点）。"""
+    """在 BGR 图上画出检测椭圆（红）与可选的被拒候选（黄色小点）。
+    Draw detection ellipses (red) and, optionally, rejected candidates (small yellow dots) on a BGR image."""
     vis = image.copy()
     if vis.ndim == 2:
         vis = cv2.cvtColor(vis, cv2.COLOR_GRAY2BGR)
@@ -23,7 +25,7 @@ def draw_detections(image: np.ndarray, result: DetectionResult, show_rejected: b
         for d in result.rejected:
             cv2.circle(vis, (int(d.x), int(d.y)), 2, (0, 200, 255), -1)
     for i, d in enumerate(result.detections, start=1):
-        # 长轴方向 u=(sinθ, cosθ) 与 x 轴夹角 = 90° - θ
+        # 长轴方向 u=(sinθ, cosθ) 与 x 轴夹角 = 90° - θ / angle between major axis u=(sinθ, cosθ) and x = 90° - θ
         cv2.ellipse(vis, (int(round(d.x)), int(round(d.y))), (int(d.major_px / 2), int(d.minor_px / 2)),
                     90.0 - d.angle_deg, 0, 360, (0, 0, 255), thickness, cv2.LINE_AA)
         cv2.circle(vis, (int(round(d.x)), int(round(d.y))), 2, (0, 255, 0), -1)
@@ -36,13 +38,16 @@ def visualize_pipeline(image: np.ndarray, result: Optional[DetectionResult] = No
                        config: Optional[DetectorConfig] = None, save_path: Optional[str] = None,
                        zoom: Optional[Sequence[int]] = None, dpi: int = 130, show: bool = False):
     """原图 / 预处理增强图 / 候选热力图+二值掩膜 / 最终检测标注图 的对比多子图。
+    Comparison panels: original / preprocessed / candidate heat map + mask / final detections.
 
-    参数
-    ----
-    image   : BGR 或灰度图
+    参数 / Parameters
+    -----------------
+    image   : BGR 或灰度图 / BGR or grey image
     result  : 已有的 DetectionResult；为 None 时内部运行检测
+              an existing DetectionResult; if None, detection is run internally
     zoom    : 可选 (x0, y0, x1, y1)，额外增加一行局部放大子图，便于观察气孔裂隙细节
-    返回 (fig, result)
+              optional (x0, y0, x1, y1): adds a row of zoomed panels to inspect slit details
+    返回 (fig, result) / Returns (fig, result)
     """
     import matplotlib
     if not show:
@@ -56,7 +61,7 @@ def visualize_pipeline(image: np.ndarray, result: Optional[DetectionResult] = No
     gray = pre.gray
     overlay = draw_detections(image, result, show_rejected=False, thickness=2)
 
-    # 候选热力图 + 自适应阈值掩膜轮廓 + 分水岭分界线
+    # 候选热力图 + 自适应阈值掩膜轮廓 + 分水岭分界线 / candidate heat map + adaptive-mask contours + watershed boundaries
     heat = cv2.applyColorMap((np.clip(result.response / max(result.response.max(), 1e-6), 0, 1) * 255)
                              .astype(np.uint8), cv2.COLORMAP_INFERNO)
     bnd = find_boundaries(result.labels, mode="inner")
@@ -64,10 +69,10 @@ def visualize_pipeline(image: np.ndarray, result: Optional[DetectionResult] = No
     heat_rgb = heat[..., ::-1]
 
     panels = [
-        ("① 原图（灰度）", gray, "gray"),
-        ("② 预处理：平场校正 + CLAHE", pre.enhanced, "gray"),
-        ("③ 候选热力图 (NCC×能量) + 分水岭分区", heat_rgb, None),
-        (f"④ 最终检测：{result.count} 个气孔", overlay[..., ::-1], None),
+        ("① 原图（灰度）/ Original (grey)", gray, "gray"),
+        ("② 预处理：平场校正 + CLAHE / Preprocessed: flat-field + CLAHE", pre.enhanced, "gray"),
+        ("③ 候选热力图 (NCC×能量) + 分水岭分区 / Candidate heat map (NCC×energy) + watershed", heat_rgb, None),
+        (f"④ 最终检测 / Final detections: {result.count} 个气孔 / stomata", overlay[..., ::-1], None),
     ]
     _set_cjk_font(plt)
     rows = 2 if zoom is None else 3
@@ -80,9 +85,9 @@ def visualize_pipeline(image: np.ndarray, result: Optional[DetectionResult] = No
     if zoom is not None:
         x0, y0, x1, y1 = zoom
         axes[2, 0].imshow(pre.enhanced[y0:y1, x0:x1], cmap="gray")
-        axes[2, 0].set_title(f"局部放大（增强图）[{x0}:{x1}, {y0}:{y1}]")
+        axes[2, 0].set_title(f"局部放大（增强图）/ Zoom (enhanced) [{x0}:{x1}, {y0}:{y1}]")
         axes[2, 1].imshow(overlay[y0:y1, x0:x1, ::-1])
-        axes[2, 1].set_title("局部放大（检测结果）")
+        axes[2, 1].set_title("局部放大（检测结果）/ Zoom (detections)")
         for ax in axes[2]:
             ax.axis("off")
         for ax in (axes[0, 0], axes[1, 1]):
@@ -96,7 +101,8 @@ def visualize_pipeline(image: np.ndarray, result: Optional[DetectionResult] = No
 
 
 def _set_cjk_font(plt):
-    """尽量选用可显示中文的字体；找不到时 matplotlib 会退化为方框，不影响图像内容。"""
+    """尽量选用可显示中文的字体；找不到时 matplotlib 会退化为方框，不影响图像内容。
+    Prefer a font that can render Chinese; if none is found matplotlib shows boxes, which does not affect the image content."""
     from matplotlib import font_manager
     for name in ("Noto Sans CJK SC", "Noto Sans CJK JP", "WenQuanYi Zen Hei", "SimHei", "Microsoft YaHei",
                  "PingFang SC", "Heiti SC", "Source Han Sans SC"):
