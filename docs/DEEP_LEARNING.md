@@ -74,6 +74,8 @@ dets = predict_with_sahi("leaf.jpg", "best.pt", tile=640, overlap=0.2, conf=0.25
 
 因此默认使用内置切片器。
 
+多尺度 TTA（1.0× + 1.25× 融合，[`TTA_COMPARISON.md`](TTA_COMPARISON.md)）把 <40 px 小气孔的召回提高了 2.5–3.3 个百分点。但整体 F1 不升，最好的 0.9409，基线 0.9410；每图耗时却增加约 1.5 倍，所以也不默认启用。
+
 ---
 
 ## 3. 训练配方（小样本）

@@ -5,7 +5,8 @@
 * ``nms``：所有尺度的框合在一起，按分数做 IoS-NMS；
 * ``wbf``：跨尺度聚类（IoS ≥ thr），框按分数加权平均。分数取各尺度平均，
   缺席的尺度记 0，所以多尺度一致的目标得分更高；
-* ``small``：以 1.0× 结果为主，只从其他尺度补充"原尺度长边 < small_px 且与 1.0× 结果不重叠"的框。
+* ``small``：以 1.0× 结果为主，只用其他尺度中"原尺度长边 < small_px"的框：与 1.0× 框重叠时
+  把该框分数提升为两者最大值，不重叠时作为新框补充。
 
 数组格式统一为 (N, 5) = [x0, y0, x1, y1, score]（原图坐标）。
 """
@@ -33,18 +34,24 @@ def fuse_scales(preds: Sequence[np.ndarray], mode: str = "wbf", thr: float = 0.5
     """融合多个尺度的预测；preds[0] 视为基准尺度（1.0×）。"""
     preds = [np.asarray(p, np.float32).reshape(-1, 5) for p in preds]
     if mode == "small":
-        base = preds[0]
+        # 只对小框做跨尺度融合：与基准框重叠 → 基准框分数取两者最大值；不重叠 → 作为新框补充
+        base = preds[0].copy()
         add = []
         for p in preds[1:]:
             if not len(p):
                 continue
             side = np.maximum(p[:, 2] - p[:, 0], p[:, 3] - p[:, 1])
             p = p[side < small_px]
-            ref = np.vstack([base] + add) if add else base
-            if len(p) and len(ref):
-                p = p[ios_matrix(p[:, :4], ref[:, :4]).max(1) < thr]
+            if not len(p):
+                continue
+            if len(base):
+                M = ios_matrix(p[:, :4], base[:, :4])
+                j = M.argmax(1)
+                hit = M[np.arange(len(p)), j] >= thr
+                np.maximum.at(base[:, 4], j[hit], p[hit, 4])
+                p = p[~hit]
             if len(p):
-                add.append(p)
+                add.append(p[greedy_nms_ios(p[:, :4], p[:, 4], thr)])
         return np.vstack([base] + add) if add else base
 
     allp = np.vstack(preds)

@@ -28,6 +28,12 @@ def test_small_only_adds_small_new_boxes():
     assert any(np.isclose(f[:, 0], 500))
 
 
+def test_small_boosts_score_of_overlapping_base_box():
+    b = np.array([[300, 300, 332, 331, 0.7]], np.float32)  # 小框，与 A 的第二个框重叠
+    f = fuse_scales([A, b], "small", small_px=40)
+    assert len(f) == 2 and np.isclose(f[1, 4], 0.7)        # 分数 0.5 → 0.7，不新增框
+
+
 def test_predict_at_scale_maps_back_to_original_coords():
     def fake(img):                                          # 在缩放后的图上固定返回中心附近一个框
         h, w = img.shape[:2]
