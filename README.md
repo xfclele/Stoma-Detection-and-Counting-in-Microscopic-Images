@@ -156,6 +156,8 @@ CLI 的默认容差为 0.35 × 期望长轴。
 
 数据结构、标注问题、收敛曲线与误差分析见 [`docs/TRAINING_REPORT.md`](docs/TRAINING_REPORT.md)。
 
+**拍新图前请先看 [`docs/IMAGING_GUIDE.md`](docs/IMAGING_GUIDE.md)**：放大倍率、对焦、照明和图像处理要与训练图一致。拍完用 `python scripts/capture_qc.py 新图文件夹/` 检查，不合格的当场重拍。
+
 ## 阶段二：生产级深度学习方案
 
 详见 [`docs/DEEP_LEARNING.md`](docs/DEEP_LEARNING.md) 与 [`docs/ANNOTATION_GUIDE.md`](docs/ANNOTATION_GUIDE.md)。概要：
@@ -193,10 +195,12 @@ stomata/
   visualize.py       visualize_pipeline()、draw_detections()
   evaluation.py      Precision / Recall / F1、点匹配、部分区域标注评估
   calibration.py     测微尺 µm/px 标定
+  quality.py         拍摄质量指标与质检阈值（清晰度、对比度、对焦均匀性）
   dl/                阶段二：数据集切片、YOLOv8-P2 训练、SAHI/内置切片推理
 scripts/
   count_stomata.py   阶段一命令行
   dl_pipeline.py     阶段二命令行（prelabel / build / train / predict）
+  capture_qc.py      拍摄后质检
 data/samples/        样例图像（含测微尺图像）
 data/annotations/    部分区域点标注（参考集）
 tests/               单元测试 + 合成图端到端测试（pytest）
@@ -382,6 +386,8 @@ below and evaluate on independently labelled whole images.
 
 Data structure, label issues, convergence curves and error analysis: [`docs/TRAINING_REPORT.md`](docs/TRAINING_REPORT.md).
 
+**Before capturing new images, read [`docs/IMAGING_GUIDE.md`](docs/IMAGING_GUIDE.md)**: magnification, focus, illumination and image processing should match the training images. After capture, run `python scripts/capture_qc.py new_images/` and retake any image it flags while the sample is still under the microscope.
+
 ## Stage 2: production deep learning
 
 See [`docs/DEEP_LEARNING.md`](docs/DEEP_LEARNING.md) and [`docs/ANNOTATION_GUIDE.md`](docs/ANNOTATION_GUIDE.md). In short:
@@ -422,10 +428,12 @@ stomata/
   visualize.py       visualize_pipeline(), draw_detections()
   evaluation.py      Precision / Recall / F1, point matching, partial-region evaluation
   calibration.py     micrometer µm/px calibration
+  quality.py         capture-quality metrics and QC thresholds (sharpness, contrast, focus uniformity)
   dl/                stage 2: dataset tiling, YOLOv8-P2 training, SAHI / built-in sliced inference
 scripts/
   count_stomata.py   stage-1 command line
   dl_pipeline.py     stage-2 command line (prelabel / build / train / predict)
+  capture_qc.py      post-capture quality check
 data/samples/        sample images (including the micrometer image)
 data/annotations/    partial-region point labels (reference set)
 tests/               unit tests + end-to-end tests on synthetic images (pytest)
