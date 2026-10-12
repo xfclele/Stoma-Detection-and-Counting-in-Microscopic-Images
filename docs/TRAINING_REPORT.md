@@ -137,6 +137,20 @@ v2_b 用小学习率、关闭 mosaic 从 v1 继续，逐图 F1 优于 v1 的有 
 - 误差模式与 v1 相同：< 40 px 的小气孔召回约 0.70，≥ 5 个邻居的密集簇约 0.86，失焦/低对比视野整体漏检（`292.1`、`23.2_1`、`16.1`、`43.3`）。
 - 进一步提升需要：更大的模型或更高输入分辨率（需要 GPU）；针对失焦视野的增强；补全 `108.1_1`、`349.3`、`221.2` 的标注；以及一组新的、未参与训练的独立测试图。
 
+## 7. 训练后的诊断与改进尝试（v2 之后）
+
+汇总见 [`data/samples/pre-trainning/TRAINING_REPORT.md`](../data/samples/pre-trainning/TRAINING_REPORT.md) 第 6 节，各项详情：
+
+- **分层诊断**：[`error_stratify_v2_threeaxis.md`](error_stratify_v2_threeaxis.md)、[`error_stratify_v2.md`](error_stratify_v2.md)。失焦和对比度在同一尺寸档内仍各自独立影响召回，失焦的影响为 4–7 个百分点。
+- **离焦和对比度增强**：[`DEFOCUS_AUGMENT.md`](DEFOCUS_AUGMENT.md)。相对同等条件的对照，增强有效（最模糊 1/4 的召回 +1.2–1.4 个百分点）。但相对 v2，F1 和计数误差都更差，不采用。
+- **SAHI 与 SlicedPredictor 对比**：[`SAHI_COMPARISON.md`](SAHI_COMPARISON.md)。F1 0.9405 对 0.9410，SAHI 更慢，继续用内置切片器。
+- **多尺度 TTA**：[`TTA_COMPARISON.md`](TTA_COMPARISON.md)。小气孔召回 +2.5–3.3 个百分点，但 F1 不升，不采用。
+- **漏检原因**（`scripts/fn_causes.py`）：
+  - 73% 的漏检在正确位置有候选框，只是分数低于 0.40；
+  - 18% 附近没有任何候选；
+  - 10% 紧挨一个已匹配的框；
+  - 真正的"二合一"只占 1%，所以不做拆分后处理。
+
 ## 复现
 
 ```bash
@@ -144,6 +158,7 @@ python scripts/prepare_human_dataset.py -o datasets/stomata_human_v2       # 数
 python scripts/eval_human.py --weights models/stomata_yolov8n_p2_human_v2/best.pt \
        -o outputs/eval_human/final --exclude 118.2 221.2                  # 评估 + 阈值扫描
 python scripts/error_analysis.py outputs/eval_human/final --conf 0.40     # 误差分析
+python scripts/fn_causes.py outputs/eval_human/final --conf 0.40                 # 漏检原因分类
 python scripts/plot_convergence.py runs/stomata/human_ft1/results.csv runs/stomata/human_ft2/results.csv \
        runs/stomata/human_ft3_clean/results.csv runs/stomata/human_v2_b/results.csv -o docs/images/convergence_human.png
 ```
