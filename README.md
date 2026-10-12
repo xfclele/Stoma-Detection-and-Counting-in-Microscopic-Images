@@ -148,6 +148,7 @@ CLI 的默认容差为 0.35 × 期望长轴。
 | 权重 | 训练数据 | 验证集（人工标注，57 张整图） |
 |---|---|---|
 | `models/stomata_yolov8n_p2_human_v2/best.pt`（**推荐**，conf 0.40） | Stomata_Enhanced 人工标注 232 张 | P 0.937 / R 0.945 / F1 0.941，计数误差 6.6% |
+| `models/stomata_yolov8n_p2_human_v3_defocus/best.pt`（存档） | 同上 + 离焦模糊增强 | P 0.928 / R 0.947 / F1 0.937，计数误差 7.5%；模糊与小气孔召回更高，见 `docs/DEFOCUS_AUGMENT.md` |
 | `models/stomata_yolov8n_p2_human/best.pt`（conf 0.45） | Stomata_Enhanced 人工标注 126 张 | P 0.935 / R 0.944 / F1 0.939，计数误差 6.8%；在 106 张独立新图上 F1 0.939、计数误差 7.3% |
 | `models/stomata_yolov8n_p2/best.pt` | 外部自动计数流程的伪标签 16 张 | P 0.921 / R 0.900 / F1 0.911，计数误差 8.9% |
 
