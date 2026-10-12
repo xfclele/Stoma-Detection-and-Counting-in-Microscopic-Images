@@ -20,7 +20,7 @@
 | 集合 | 图像 | 标注框 | 说明 |
 |---|---|---|---|
 | 训练 | 232 张（2560×1920） | 74,385 | `Stomata_Enhanced/train`，切成 2,784 个 640 切片 |
-| 验证 | 59 张 | 17,490 | `Stomata_Enhanced/val` |
+| 验证 | 58 张（原 59 张，已删除重复的 `23.2_1`） | 约 17,270 | `Stomata_Enhanced/val` |
 
 从训练中剔除的 2 张（标注不完整）：
 
@@ -39,6 +39,17 @@
 | **v2：人工标注 232 张（最终）** | **0.40** | **0.937** | **0.945** | **0.941** | **18.5 个（6.6%）** | **+2.7** |
 
 - v2 相比 v1：逐图 F1 在 39/57 张上更好（Wilcoxon p = 0.011）；计数误差略降，但不显著（p = 0.20）。
+
+**数据更正（去重后，56 张）：**验证集中原有的 `23.2_1.jpg` 与 `23.2.jpg` 是同一个图像文件，只是标注了两次（两份标签一致性 F1 0.90，`23.2_1` 多标了 35 个、少标了 12 个，更完整）。现已保留 `23.2_1` 的标签作为 `23.2` 的标签，并删除 `23.2_1`。用缓存的预测结果在去重后的 56 张图上重算：
+
+| 模型 | 阈值 | 精确率 | 召回率 | F1 | 计数误差 | 计数偏差 |
+|---|---|---|---|---|---|---|
+| 伪标签模型 | 0.25 | 0.921 | 0.906 | 0.914 | 8.2% | −4.9 |
+| v1 | 0.45 | 0.935 | 0.947 | 0.941 | 6.6% | +4.0 |
+| **v2** | **0.40** | **0.937** | **0.948** | **0.942** | **6.4%** | **+3.5** |
+| v3_defocus（存档） | 0.40 | 0.928 | 0.950 | 0.939 | 7.3% | +7.1 |
+
+排名和结论不变：v2 相比 v1 逐图 F1 在 38/56 张上更好（p = 0.017），计数误差差异不显著（p = 0.25）；各模型的最优阈值也不变。本报告其余部分（以及 SAHI、TTA、离焦增强等对照实验）的数字仍是按原来 57 张计算的，因为各方案用的是同一个验证集，相互比较依然成立。
 - **独立测试**：新补充的 106 张训练图在 v1 训练时从未出现过，可作独立测试集。用事先固定的阈值 0.45，v1 在这 106 张上的结果为：精确率 0.934、召回率 0.944、F1 0.939、计数误差 7.3%，与其验证集结果基本一致。这说明验证集上的数字没有明显偏乐观，新补标注的口径也与原有标注一致。
 - v2 已用这 106 张训练，目前**没有**独立测试集；表中 v2 的数字是在验证集上选阈值得到的，可能略偏乐观。
 
@@ -56,7 +67,7 @@
 |---|---|---|
 | 小气孔（框长边 < 40 px） | 约 0.70 | 共约 240 个，占比很小但最难 |
 | 密集簇（100 px 内 ≥ 5 个邻居） | 约 0.86 | ≥ 7 个邻居时降到约 0.2（样本仅 32 个） |
-| 失焦 / 低对比度视野 | 整片漏检 | 误差最大的图：`292.1`、`23.2_1`、`16.1`、`43.3` |
+| 失焦 / 低对比度视野 | 整片漏检 | 误差最大的图：`292.1`、`23.2`、`16.1`、`43.3` |
 | 低置信度预测（0.4–0.6） | — | 误检集中在这一区间；置信度 ≥ 0.7 的预测精确率约 0.98 |
 
 误检样例中，相当一部分看上去是人工漏标的真实气孔，所以按现有标注算出的精确率偏保守。漏检和误检样例拼图：[漏检](../../../docs/images/fn_gallery_human.jpg)、[误检](../../../docs/images/fp_gallery_human.jpg)。
@@ -130,7 +141,7 @@ Training path: COCO pre-training → pre-training on pseudo-labels from an exter
 | Split | Images | Boxes | Notes |
 |---|---|---|---|
 | Training | 232 (2560×1920) | 74,385 | `Stomata_Enhanced/train`, cut into 2,784 tiles of 640 |
-| Validation | 59 | 17,490 | `Stomata_Enhanced/val` |
+| Validation | 58 (originally 59; the duplicate `23.2_1` removed) | about 17,270 | `Stomata_Enhanced/val` |
 
 Two images were removed from training (incomplete labels):
 
@@ -149,6 +160,17 @@ Evaluation: whole-image inference; predicted stoma centres are matched one-to-on
 | **v2: 232 human-labelled images (final)** | **0.40** | **0.937** | **0.945** | **0.941** | **18.5 (6.6%)** | **+2.7** |
 
 - v2 vs v1: per-image F1 is better on 39/57 images (Wilcoxon p = 0.011); count error is slightly lower but not significantly (p = 0.20).
+
+**Data correction (deduplicated, 56 images):** the former `23.2_1.jpg` in the validation set was the same image file as `23.2.jpg`, labelled twice (the two label sets agree at F1 0.90; `23.2_1` has 35 more and 12 fewer stomata and is more complete). The `23.2_1` labels are now kept as the labels of `23.2`, and `23.2_1` has been removed. Re-scored from cached predictions on the 56 deduplicated images:
+
+| Model | Threshold | Precision | Recall | F1 | Count error | Count bias |
+|---|---|---|---|---|---|---|
+| Pseudo-label model | 0.25 | 0.921 | 0.906 | 0.914 | 8.2% | −4.9 |
+| v1 | 0.45 | 0.935 | 0.947 | 0.941 | 6.6% | +4.0 |
+| **v2** | **0.40** | **0.937** | **0.948** | **0.942** | **6.4%** | **+3.5** |
+| v3_defocus (archived) | 0.40 | 0.928 | 0.950 | 0.939 | 7.3% | +7.1 |
+
+The ranking and conclusions are unchanged: v2's per-image F1 is better than v1's on 38/56 images (p = 0.017), the count-error difference is not significant (p = 0.25), and each model's best threshold is unchanged. The other numbers in this report (and in the SAHI, TTA and defocus comparisons) are still on the original 57 images; since all variants were compared on the same validation set, the comparisons remain valid.
 - **Independent test**: the 106 newly added training images were never seen when v1 was trained, so they serve as an independent test set. With the threshold fixed in advance at 0.45, v1 scores precision 0.934, recall 0.944, F1 0.939 and count error 7.3% on them — essentially the same as on the validation set. So the validation numbers are not noticeably optimistic, and the new labels follow the same conventions as the old ones.
 - v2 was trained on these 106 images, so there is currently **no** independent test set for it; its numbers use a threshold chosen on the validation set and may be slightly optimistic.
 
@@ -166,7 +188,7 @@ Each time a training segment restarts with mosaic augmentation the metrics first
 |---|---|---|
 | Small stomata (box long side < 40 px) | about 0.70 | about 240 in total; a small share but the hardest |
 | Dense clusters (≥ 5 neighbours within 100 px) | about 0.86 | drops to about 0.2 with ≥ 7 neighbours (only 32 samples) |
-| Defocused / low-contrast fields | whole areas missed | images with the largest errors: `292.1`, `23.2_1`, `16.1`, `43.3` |
+| Defocused / low-contrast fields | whole areas missed | images with the largest errors: `292.1`, `23.2`, `16.1`, `43.3` |
 | Low-confidence predictions (0.4–0.6) | — | false positives concentrate here; predictions with confidence ≥ 0.7 have precision about 0.98 |
 
 Many of the false-positive samples look like real stomata that annotators missed, so precision measured against the current labels is conservative. Sample galleries: [misses](../../../docs/images/fn_gallery_human.jpg), [false positives](../../../docs/images/fp_gallery_human.jpg).

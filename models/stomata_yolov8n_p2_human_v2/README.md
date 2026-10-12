@@ -17,6 +17,8 @@
 | 0.937 | 0.945 | 0.941 | 6.6% | +2.7 / 图 |
 
 与 v1 相比逐图 F1 提升显著（39/57 张更好，p = 0.011），计数误差略降但不显著。阈值在验证集上选择；v1 在 106 张独立新图上的结果（F1 0.939）与其验证集结果一致，可作为这一偏差很小的参考。
+
+验证集中重复的 `23.2_1` 已删除。去重后的 56 张上为 P 0.937 / R 0.948 / F1 0.942，计数误差 6.4%，偏差 +3.5 / 图，推荐阈值仍为 0.40。
 详见 [`docs/TRAINING_REPORT.md`](../../docs/TRAINING_REPORT.md) 第 6 节。
 
 ## 使用
@@ -44,6 +46,8 @@ python scripts/dl_pipeline.py predict images/ --weights models/stomata_yolov8n_p
 | 0.937 | 0.945 | 0.941 | 6.6% | +2.7 per image |
 
 Per-image F1 is significantly better than v1 (39/57 images better, p = 0.011); count error is slightly lower but not significantly. The threshold was chosen on the validation set; v1's result on 106 independent new images (F1 0.939) matched its validation result, suggesting this bias is small.
+
+The duplicate `23.2_1` has since been removed from the validation set. On the 56 deduplicated images: P 0.937 / R 0.948 / F1 0.942, count error 6.4%, bias +3.5 per image; the recommended threshold is still 0.40.
 See section 6 of [`docs/TRAINING_REPORT.md`](../../docs/TRAINING_REPORT.md).
 
 ## Usage
