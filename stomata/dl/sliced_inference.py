@@ -124,23 +124,34 @@ class SlicedPredictor:
         return cx0, cy0, cx1, cy1
 
 
-def predict_with_sahi(image_path: str, weights: str, tile: int = 640, overlap: float = 0.2, conf: float = 0.25,
-                      device: str = "cuda:0", postprocess: str = "GREEDYNMM", match_metric: str = "IOS",
-                      match_threshold: float = 0.5, standard_pred: bool = False) -> list[BoxDetection]:
-    """官方 SAHI 路径（pip install sahi ultralytics）。"""
+def load_sahi_model(weights: str, conf: float = 0.25, device: str = "cuda:0", image_size: int = 640):
+    """加载 SAHI 检测模型；批量推理时只加载一次，传给 predict_with_sahi(model=...)。"""
     from sahi import AutoDetectionModel
+
+    return AutoDetectionModel.from_pretrained(model_type="ultralytics", model_path=weights,
+                                              confidence_threshold=conf, device=device, image_size=image_size)
+
+
+def predict_with_sahi(image, weights: Optional[str] = None, tile: int = 640, overlap: float = 0.2, conf: float = 0.25,
+                      device: str = "cuda:0", postprocess: str = "GREEDYNMM", match_metric: str = "IOS",
+                      match_threshold: float = 0.5, standard_pred: bool = False, model=None,
+                      force_postprocess: bool = True) -> list[BoxDetection]:
+    """官方 SAHI 路径（pip install sahi ultralytics）。image 可为路径或 BGR 数组。"""
     from sahi.predict import get_sliced_prediction
 
-    model = AutoDetectionModel.from_pretrained(model_type="ultralytics", model_path=weights,
-                                               confidence_threshold=conf, device=device)
+    if model is None:
+        model = load_sahi_model(weights, conf, device)
+    if isinstance(image, np.ndarray):
+        image = image[:, :, ::-1].copy()                 # SAHI 期望 RGB 数组
     res = get_sliced_prediction(
-        image_path, model,
+        image, model,
         slice_height=tile, slice_width=tile,
         overlap_height_ratio=overlap, overlap_width_ratio=overlap,
         perform_standard_pred=standard_pred,            # 气孔很小，整图预测通常只带来误检，默认关闭
         postprocess_type=postprocess,                    # GREEDYNMM：合并而非简单丢弃重叠框
         postprocess_match_metric=match_metric,           # IOS：对切片边界截断的半框更鲁棒
         postprocess_match_threshold=match_threshold,
+        force_postprocess_type=force_postprocess,        # 否则模型阈值低时 SAHI 会自动改用 NMS/IOU
         verbose=0,
     )
     out = []
