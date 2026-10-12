@@ -154,6 +154,8 @@ CLI 的默认容差为 0.35 × 期望长轴。
 | `models/stomata_yolov8n_p2_human/best.pt`（conf 0.45） | Stomata_Enhanced 人工标注 126 张 | P 0.935 / R 0.944 / F1 0.939，计数误差 6.8%；在 106 张独立新图上 F1 0.939、计数误差 7.3% |
 | `models/stomata_yolov8n_p2/best.pt` | 外部自动计数流程的伪标签 16 张 | P 0.921 / R 0.900 / F1 0.911，计数误差 8.9% |
 
+表中数字按原 57 张计算。验证集中重复的 `23.2_1` 已删除，去重后的 56 张上 v2 为 P 0.937 / R 0.948 / F1 0.942，计数误差 6.4%，排名不变（见 [`data/samples/pre-trainning/TRAINING_REPORT.md`](data/samples/pre-trainning/TRAINING_REPORT.md) 第 3 节）。
+
 数据结构、标注问题、收敛曲线与误差分析见 [`docs/TRAINING_REPORT.md`](docs/TRAINING_REPORT.md)。
 
 **拍新图前请先看 [`docs/IMAGING_GUIDE.md`](docs/IMAGING_GUIDE.md)**：放大倍率、对焦、照明和图像处理要与训练图一致。拍完用 `python scripts/capture_qc.py 新图文件夹/` 检查，不合格的当场重拍。
@@ -383,6 +385,8 @@ below and evaluate on independently labelled whole images.
 | `models/stomata_yolov8n_p2_human_v3_defocus/best.pt` (archived) | same + defocus blur augmentation | P 0.928 / R 0.947 / F1 0.937, count error 7.5%; higher recall for blurred and small stomata, see `docs/DEFOCUS_AUGMENT.md` |
 | `models/stomata_yolov8n_p2_human/best.pt` (conf 0.45) | 126 human-labelled Stomata_Enhanced images | P 0.935 / R 0.944 / F1 0.939, count error 6.8%; on 106 independent new images F1 0.939, count error 7.3% |
 | `models/stomata_yolov8n_p2/best.pt` | pseudo-labels from an external automatic pipeline, 16 images | P 0.921 / R 0.900 / F1 0.911, count error 8.9% |
+
+The table uses the original 57 images. The duplicate `23.2_1` has since been removed from the validation set; on the 56 deduplicated images v2 scores P 0.937 / R 0.948 / F1 0.942 with count error 6.4%, and the ranking is unchanged (see section 3 of [`data/samples/pre-trainning/TRAINING_REPORT.md`](data/samples/pre-trainning/TRAINING_REPORT.md)).
 
 Data structure, label issues, convergence curves and error analysis: [`docs/TRAINING_REPORT.md`](docs/TRAINING_REPORT.md).
 

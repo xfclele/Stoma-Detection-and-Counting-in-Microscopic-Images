@@ -75,7 +75,7 @@
 - **密度**：100 px 内有 ≥ 5 个邻居的密集簇召回降到 0.86，≥ 7 个邻居仅 0.22（样本很少，32 个）。
 - **边缘**：距图像边缘 < 25 px 的目标召回 0.89（半个气孔，标注口径本身也不一致）。
 - **置信度**：≥ 0.7 的预测精确率 0.98；0.4–0.6 区间只有 0.59–0.70，误检集中在这里。
-- **误差集中的图像**：`292.1`（−80）、`23.2_1`（−68）、`43.3`、`16.1`、`23.2` 以漏检为主，多为失焦、低对比度的灰色视野；`214.1`、`573.2`、`112.3`、`115.1` 以多检为主。
+- **误差集中的图像**（`23.2_1` 与 `23.2` 是同一张图，现已删除 `23.2_1` 并保留其标签作为 `23.2` 的标签）：`292.1`（−80）、`23.2_1`（−68）、`43.3`、`16.1`、`23.2` 以漏检为主，多为失焦、低对比度的灰色视野；`214.1`、`573.2`、`112.3`、`115.1` 以多检为主。
 - **样例**：漏检（`images/fn_gallery_human.jpg`）多为模糊/低对比的气孔和少量明显漏掉的清晰气孔；误检（`images/fp_gallery_human.jpg`）中相当一部分看上去就是人工漏标的真实气孔，其余是圆形气泡/细胞和切片边缘的半个气孔。因此按现有标签算出的精确率偏保守。
 
 ## 5. 建议的下一步（按收益排序）
@@ -242,7 +242,7 @@ Full tables are produced by `scripts/error_analysis.py`. Key points:
 - **Density**: recall drops to 0.86 in dense clusters (≥ 5 neighbours within 100 px) and to 0.22 with ≥ 7 neighbours (few samples, 32).
 - **Border**: recall 0.89 for objects within 25 px of the image border (half stomata, where labelling conventions also vary).
 - **Confidence**: precision 0.98 for predictions ≥ 0.7, only 0.59–0.70 in the 0.4–0.6 range, where false positives concentrate.
-- **Images with concentrated errors**: `292.1` (−80), `23.2_1` (−68), `43.3`, `16.1` and `23.2` are mostly misses, mostly defocused, low-contrast grey fields; `214.1`, `573.2`, `112.3` and `115.1` are mostly over-counts.
+- **Images with concentrated errors** (`23.2_1` was the same image as `23.2`; `23.2_1` has since been removed and its labels kept as those of `23.2`): `292.1` (−80), `23.2_1` (−68), `43.3`, `16.1` and `23.2` are mostly misses, mostly defocused, low-contrast grey fields; `214.1`, `573.2`, `112.3` and `115.1` are mostly over-counts.
 - **Samples**: misses (`images/fn_gallery_human.jpg`) are mostly blurred / low-contrast stomata plus a few clearly missed sharp ones; many false positives (`images/fp_gallery_human.jpg`) look like real stomata the annotators missed, the rest are round bubbles/cells and half stomata at tile edges. Precision against the current labels is therefore conservative.
 
 ## 5. Suggested next steps (by expected benefit)

@@ -110,7 +110,7 @@ v2 模型（`models/stomata_yolov8n_p2_human_v2/best.pt`）只见过一种拍摄
 说明：
 
 - **"注意"类：**这一类的召回与合格图相近，只有精确率和计数误差略差，所以只作提醒，不要求重拍。
-- **样本量小：**被判"重拍"的只有 7 张，而且 `23.2` 和 `23.2_1` 是同一个图像文件，在验证集里被计了两次。阈值本身来自训练图，但选 5% 和 10% 两档时参考过验证集的结果，所以上表可能略偏乐观。
+- **样本量小：**被判"重拍"的只有 7 张，而且其中 `23.2` 和 `23.2_1` 是同一个图像文件、被计了两次（`23.2_1` 现已从验证集删除）。阈值本身来自训练图，但选 5% 和 10% 两档时参考过验证集的结果，所以上表可能略偏乐观。
 - **看不出的问题：**叶脉密集（如 `292.1`）、气孔挤在一起这类问题，图像指标看不出来，仍需目视检查模型的叠加图。
 
 ---
@@ -225,5 +225,5 @@ Recommendations [standard]:
 Notes:
 
 - **"Check" images:** their recall is similar to OK images; only precision and count error are slightly worse, so this verdict is a reminder and does not require a retake.
-- **Small sample:** only 7 images were marked "retake", and `23.2` and `23.2_1` are the same image file, counted twice in the validation set. The thresholds come from the training images, but the choice of the 5% and 10% levels was made after looking at the validation results, so the table may be slightly optimistic.
+- **Small sample:** only 7 images were marked "retake", and two of them, `23.2` and `23.2_1`, were the same image file counted twice (`23.2_1` has since been removed from the validation set). The thresholds come from the training images, but the choice of the 5% and 10% levels was made after looking at the validation results, so the table may be slightly optimistic.
 - **Problems the metrics cannot see:** dense veins (such as `292.1`) and crowded stomata are invisible to image metrics; the model's overlay images still need a visual check.
