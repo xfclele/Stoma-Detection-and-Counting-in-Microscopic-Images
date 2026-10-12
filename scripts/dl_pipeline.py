@@ -10,7 +10,7 @@
     # 3) 小样本微调 YOLOv8s-P2（需 GPU 与 `pip install ultralytics`）
     python scripts/dl_pipeline.py train datasets/stomata/data.yaml --epochs 150
 
-    # 4) SAHI 切片推理 + CSV（需 `pip install sahi`；加 --no-sahi 使用内置切片器）
+    # 4) 切片推理 + CSV（默认内置 SlicedPredictor；加 --sahi 改用官方 SAHI，需 `pip install sahi`）
     python scripts/dl_pipeline.py predict images/ --weights runs/stomata/yolov8s_p2/weights/best.pt -o outputs_dl
 """
 from __future__ import annotations
@@ -56,11 +56,11 @@ def cmd_predict(a):
     files = StomataCounter.list_images(a.images)
     os.makedirs(a.out, exist_ok=True)
     rows = []
-    predictor = None if not a.no_sahi else SlicedPredictor(
+    predictor = None if a.sahi else SlicedPredictor(
         ultralytics_tile_predictor(a.weights, conf=a.conf, imgsz=a.tile, device=a.device), a.tile, a.overlap)
     for path in files:
         if predictor is None:
-            dets = predict_with_sahi(path, a.weights, a.tile, a.overlap, a.conf, device=a.device or "cuda:0")
+            dets = predict_with_sahi(path, a.weights, a.tile, a.overlap, a.conf, device=a.device or "cpu")
         else:
             dets = predictor(cv2.imdecode(np.fromfile(path, np.uint8), cv2.IMREAD_COLOR))
         img = cv2.imdecode(np.fromfile(path, np.uint8), cv2.IMREAD_COLOR)
@@ -105,11 +105,13 @@ def main():
     p.add_argument("--device", default=None)
     p.set_defaults(fn=cmd_train)
 
-    p = sub.add_parser("predict", help="SAHI 切片推理计数")
+    p = sub.add_parser("predict", help="切片推理计数")
     p.add_argument("images"); p.add_argument("--weights", required=True); p.add_argument("-o", "--out", default="outputs_dl")
     p.add_argument("--tile", type=int, default=640); p.add_argument("--overlap", type=float, default=0.2)
     p.add_argument("--conf", type=float, default=0.25); p.add_argument("--device", default=None)
-    p.add_argument("--no-sahi", action="store_true", help="使用内置 SlicedPredictor（中心归属去重）")
+    p.add_argument("--sahi", action="store_true",
+                   help="改用官方 SAHI（GREEDYNMM+IOS）。在验证集上 F1 未优于内置切片器且更慢，见 docs/SAHI_COMPARISON.md")
+    p.add_argument("--no-sahi", action="store_true", help="（默认行为，保留以兼容旧命令）使用内置 SlicedPredictor")
     p.add_argument("--margin-exclusion", action="store_true", help="剔除触碰图像边缘的框")
     p.add_argument("--box-pad", type=float, default=1.1, help="构建数据集时的框扩张系数，用于换算长轴")
     p.set_defaults(fn=cmd_predict)

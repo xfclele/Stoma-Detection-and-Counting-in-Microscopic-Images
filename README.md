@@ -160,9 +160,10 @@ CLI 的默认容差为 0.35 × 期望长轴。
 
 * **架构选择**：**YOLOv8s-P2**（增加 stride-4 的 P2 检测头）。任务需要逐个坐标 + 长轴，检测模型能直接给出；
   气孔密度中等、边界可分，不需要 CSRNet/FIDTM 这类只擅长总数的密度估计。需要回归朝向时可换 YOLOv8-OBB。
-* **禁止整图缩放**：训练时在原始分辨率上切 640×640（重叠 20%）的小块，推理用 **SAHI** 同样切片，
-  各片结果平移回全图后用 **IoS（交集/较小框面积）+ GREEDYNMM** 合并，消除切片边界处的重复计数；
-  内置的 `SlicedPredictor` 还提供"中心归属"去重（每个目标只由其中心所在切片的核心区负责）。
+* **禁止整图缩放**：训练时在原始分辨率上切 640×640（重叠 20%）的小块，推理同样切片，结果平移回全图后去重。
+  默认使用内置的 `SlicedPredictor`：按"中心归属"去重，即每个目标只由其中心所在切片的核心区负责。
+  也可以改用官方 SAHI（IoS + GREEDYNMM 合并，`--sahi`）。两者的对照实验见 `docs/SAHI_COMPARISON.md`：
+  SAHI 的 F1 没有提升（0.9405 对 0.9410），且慢约 10%。
 * **小样本流程**：阶段一预标注 → 人工在点标注工具里增删 → 点转框 →
   冻结 backbone 微调（`freeze=10`，`degrees=180` 旋转增强）→ 用阶段二模型再预标注下一批（主动学习）。
 
@@ -171,11 +172,11 @@ python scripts/dl_pipeline.py prelabel images/ -o labels_points/          # 1. �
 #   ……人工校正 labels_points/*.json ……
 python scripts/dl_pipeline.py build labels_points/ --images images/ -o datasets/stomata   # 2. 切片数据集
 python scripts/dl_pipeline.py train datasets/stomata/data.yaml --epochs 150            # 3. 微调（GPU）
-python scripts/dl_pipeline.py predict images/ --weights runs/stomata/yolov8s_p2/weights/best.pt -o outputs_dl  # 4. SAHI 推理
+python scripts/dl_pipeline.py predict images/ --weights runs/stomata/yolov8s_p2/weights/best.pt -o outputs_dl  # 4. 切片推理（默认 SlicedPredictor）
 ```
 
-> 阶段二中，数据集构建和内置切片推理/去重有单元测试；YOLO 训练和 SAHI 调用在本仓库**没有实际训练或运行过**
-> （开发环境没有 GPU 和标注数据），使用前请以 Ultralytics / SAHI 当前版本的文档核对参数名。
+> 阶段二的训练和推理已在本仓库实际运行：CPU 训练，SAHI 0.12.8 / Ultralytics 8.4。结果见上方模型表和 `docs/`；
+> 数据集构建和内置切片推理/去重有单元测试。
 
 ---
 

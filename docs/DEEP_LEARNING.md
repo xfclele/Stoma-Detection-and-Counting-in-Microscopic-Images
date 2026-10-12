@@ -64,6 +64,16 @@ dets = predict_with_sahi("leaf.jpg", "best.pt", tile=640, overlap=0.2, conf=0.25
 
 训练与推理的切片尺寸必须一致（都是 640，原始分辨率），否则尺度分布会不匹配。
 
+### 2.3 实测对照
+
+对照实验见 [`SAHI_COMPARISON.md`](SAHI_COMPARISON.md)：v2 模型，57 张验证图。
+
+- 内置 `SlicedPredictor`：F1 0.9410，计数误差 6.60%，每图 1.3 s。
+- SAHI GREEDYNMM + IOS：F1 0.9405，计数误差 6.77%，每图 1.4 s。逐图配对比较，两者差异不显著。
+- SAHI NMS + IOU：F1 只有 0.92。截断的半框和完整框之间 IoU 太低，NMS 去不掉重复框。注意 SAHI 在模型阈值较低时会自动切换到这种方式，`predict_with_sahi` 已强制使用指定的合并方式。
+
+因此默认使用内置切片器。
+
 ---
 
 ## 3. 训练配方（小样本）
