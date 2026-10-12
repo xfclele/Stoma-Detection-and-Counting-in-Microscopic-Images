@@ -1,4 +1,6 @@
-# SAHI 与内置 SlicedPredictor 的对照实验
+# SAHI 与内置 SlicedPredictor 的对照实验 / Controlled Comparison: SAHI vs Built-in SlicedPredictor
+
+**语言 / Language：** 中文（下文） · [English](#english-version)
 
 **结论：SAHI 的 F1 没有提升（−0.05 个百分点），远未达到保留门槛（> 0.5 个百分点），而且更慢。继续使用内置 `SlicedPredictor`；`dl_pipeline.py predict` 的默认后端也已改为它，需要 SAHI 时加 `--sahi`。**
 
@@ -43,5 +45,55 @@ python scripts/eval_human.py --weights models/stomata_yolov8n_p2_human_v2/best.p
     --conf 0.40 --backend sliced -o outputs/eval_human/sahi_cmp/sliced_ic0.05
 python scripts/eval_human.py --weights models/stomata_yolov8n_p2_human_v2/best.pt --exclude 118.2 221.2 \
     --conf 0.40 --backend sahi -o outputs/eval_human/sahi_cmp/sahi_gnmm_ic0.05      # 加 --sahi-postprocess NMS --sahi-metric IOU 得到 NMS 版
+python scripts/compare_runs.py outputs/eval_human/sahi_cmp/sliced_ic0.05 0.40 outputs/eval_human/sahi_cmp/sahi_gnmm_ic0.05 0.40
+```
+
+---
+
+# English version
+
+**Conclusion: SAHI did not improve F1 (−0.05 percentage points), far from the retention threshold (> 0.5 points), and it is slower. The built-in `SlicedPredictor` stays; it is now also the default backend of `dl_pipeline.py predict`, with `--sahi` to opt into SAHI.**
+
+## Setup
+
+- Model: `models/stomata_yolov8n_p2_human_v2/best.pt`.
+- Validation images: 57, excluding `118.2` and `221.2`.
+- Tiles: 640 × 640, 20% overlap, 4 CPU cores.
+- Matching: one-to-one centre matching, tolerance 0.5 × the image's median box long side.
+- Backends:
+  - **SlicedPredictor**: this repository's implementation with "centre ownership" de-duplication, i.e. each box belongs only to the tile containing its centre.
+  - **SAHI**: version 0.12.8 `get_sliced_prediction`, without a whole-image pass. Two merge modes were compared:
+    - GREEDYNMM + IOS 0.5, this repository's original SAHI configuration;
+    - NMS + IOU 0.5, which SAHI switches to automatically when the model threshold is low.
+- Inference thresholds: each backend was run twice — once at threshold 0.05 followed by a sweep over 0.10–0.80, and once directly at 0.40. The two agree at 0.40 to within 0.0001.
+- Timing: inference time per image; the first image includes model warm-up and is excluded.
+
+## Results
+
+| Backend | Threshold | P | R | F1 | Count MAE | Count MAPE | Count bias | Time per image |
+|---|---|---|---|---|---|---|---|---|
+| **SlicedPredictor** | 0.40 | **0.9368** | 0.9452 | **0.9410** | **18.5** | **6.60%** | **+2.7** | **1.26–1.34 s** |
+| SAHI GREEDYNMM + IOS | 0.40 | 0.9341 | 0.9471 | 0.9405 | 18.9 | 6.77% | +4.2 | 1.39–1.47 s (about 10% slower) |
+| SAHI NMS + IOU | 0.45 (its best) | — | — | 0.9232 | — | 8.35% | — | 1.42–1.45 s |
+| SAHI NMS + IOU | 0.40 | 0.8929 | 0.9473 | 0.9193 | — | 10.28% | +18.3 | |
+
+- The best threshold of every backend is 0.40, except NMS + IOU at 0.45, so comparing at each backend's best threshold gives the same conclusion.
+- **Per-image paired comparison of SlicedPredictor and SAHI GREEDYNMM** ([comparison table](sahi/compare_sliced_vs_sahi_gnmm.md)):
+  - F1: SAHI better on 17 images, worse on 23, tied on 17; Wilcoxon p = 0.18, not significant;
+  - count error: p = 0.16, also not significant.
+  - SAHI's recall is slightly higher (+0.2 points) but its precision is lower (−0.3 points): half stomata cut by tile borders sometimes fail to merge with the complete box and are counted twice, so the count bias rises from +2.7 to +4.2.
+- **SAHI NMS + IOU** is clearly worse: lower F1 on 55 of 57 images (p = 7e-11). The IoU between a truncated half box and the complete box is low, so NMS cannot remove these duplicates, adding about 18 counts per image.
+
+## Note
+
+When the model confidence threshold is low, SAHI silently switches the merge mode to NMS/IOU, logging only a warning — exactly the poor configuration in the table. `predict_with_sahi()` now passes `force_postprocess_type=True` by default to keep the specified merge mode.
+
+## Reproduction
+
+```bash
+python scripts/eval_human.py --weights models/stomata_yolov8n_p2_human_v2/best.pt --exclude 118.2 221.2 \
+    --conf 0.40 --backend sliced -o outputs/eval_human/sahi_cmp/sliced_ic0.05
+python scripts/eval_human.py --weights models/stomata_yolov8n_p2_human_v2/best.pt --exclude 118.2 221.2 \
+    --conf 0.40 --backend sahi -o outputs/eval_human/sahi_cmp/sahi_gnmm_ic0.05      # add --sahi-postprocess NMS --sahi-metric IOU for the NMS variant
 python scripts/compare_runs.py outputs/eval_human/sahi_cmp/sliced_ic0.05 0.40 outputs/eval_human/sahi_cmp/sahi_gnmm_ic0.05 0.40
 ```

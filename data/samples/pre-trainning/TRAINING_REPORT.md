@@ -1,4 +1,6 @@
-# 气孔检测模型 · 最终训练结果
+# 气孔检测模型 · 最终训练结果 / Stomata Detection Model · Final Training Results
+
+**语言 / Language：** 中文（下文） · [English](#english-version)
 
 > 本文件只汇总最终结论。完整过程（数据分析、各段训练、误差分析、显著性检验）见仓库根目录 [`docs/TRAINING_REPORT.md`](../../../docs/TRAINING_REPORT.md)。
 
@@ -105,3 +107,113 @@ python scripts/dl_pipeline.py predict <图像目录> \
 ```
 
 默认使用内置 `SlicedPredictor`；加 `--sahi` 可改用官方 SAHI。输出每张图的检测叠加图和 `stomata_dl.csv`（每个气孔的坐标、长轴、置信度）。
+
+---
+
+# English version
+
+> This file summarises the final conclusions only. The full process (data analysis, training segments, error analysis, significance tests) is in [`docs/TRAINING_REPORT.md`](../../../docs/TRAINING_REPORT.md) at the repository root.
+
+## 1. Final model
+
+| Item | Value |
+|---|---|
+| Weights | [`models/stomata_yolov8n_p2_human_v2/best.pt`](../../../models/stomata_yolov8n_p2_human_v2/) (6.3 MB) |
+| Architecture | YOLOv8n-P2: YOLOv8n plus a stride-4 small-object detection head, 2.9 M parameters |
+| Recommended confidence threshold | **0.40** |
+| Inference | the full-resolution image is cut into 640×640 tiles (20% overlap), each tile is detected and results are merged by "centre ownership" (built-in `SlicedPredictor`; compared with SAHI and multi-scale TTA, see section 6) |
+
+Training path: COCO pre-training → pre-training on pseudo-labels from an external automatic counting pipeline (20 images in `model_review_samples/`) → fine-tuning on the human-labelled `Stomata_Enhanced` data.
+
+## 2. Training data
+
+| Split | Images | Boxes | Notes |
+|---|---|---|---|
+| Training | 232 (2560×1920) | 74,385 | `Stomata_Enhanced/train`, cut into 2,784 tiles of 640 |
+| Validation | 59 | 17,490 | `Stomata_Enhanced/val` |
+
+Two images were removed from training (incomplete labels):
+
+- `108.1_1`: hundreds of stomata in the image but only 3 boxes in the label file;
+- `349.3`: the whole right side is unlabelled.
+
+## 3. Final results
+
+Evaluation: whole-image inference; predicted stoma centres are matched one-to-one with human box centres, tolerance 0.5 × box long side (about 25 px).
+57 validation images: `118.2` (used to train the pseudo-label model) and `221.2` (only about 2/3 labelled) are excluded.
+
+| Model | Threshold | Precision | Recall | F1 | Mean count error per image | Mean count bias per image |
+|---|---|---|---|---|---|---|
+| Pseudo-label model (starting point) | 0.25 | 0.921 | 0.900 | 0.911 | 25.3 (8.9%) | −6.9 |
+| v1: 126 human-labelled images | 0.45 | 0.935 | 0.944 | 0.939 | 19.0 (6.8%) | +3.1 |
+| **v2: 232 human-labelled images (final)** | **0.40** | **0.937** | **0.945** | **0.941** | **18.5 (6.6%)** | **+2.7** |
+
+- v2 vs v1: per-image F1 is better on 39/57 images (Wilcoxon p = 0.011); count error is slightly lower but not significantly (p = 0.20).
+- **Independent test**: the 106 newly added training images were never seen when v1 was trained, so they serve as an independent test set. With the threshold fixed in advance at 0.45, v1 scores precision 0.934, recall 0.944, F1 0.939 and count error 7.3% on them — essentially the same as on the validation set. So the validation numbers are not noticeably optimistic, and the new labels follow the same conventions as the old ones.
+- v2 was trained on these 106 images, so there is currently **no** independent test set for it; its numbers use a threshold chosen on the validation set and may be slightly optimistic.
+
+## 4. Convergence
+
+![Convergence curve](../../../docs/images/convergence_human.png)
+
+Each time a training segment restarts with mosaic augmentation the metrics first drop, then return to the same level (validation mAP50 about 0.94–0.95); training loss is still decreasing slowly while validation metrics are flat. Doubling the data (128 → 232 images) improved F1 by only about 0.2 percentage points.
+
+**Conclusion: at the current model size (YOLOv8n-P2) and 640 input the model has converged, with a ceiling of about F1 0.94 and a count error of 6–7%.**
+
+## 5. Main sources of error
+
+| Type | Recall | Notes |
+|---|---|---|
+| Small stomata (box long side < 40 px) | about 0.70 | about 240 in total; a small share but the hardest |
+| Dense clusters (≥ 5 neighbours within 100 px) | about 0.86 | drops to about 0.2 with ≥ 7 neighbours (only 32 samples) |
+| Defocused / low-contrast fields | whole areas missed | images with the largest errors: `292.1`, `23.2_1`, `16.1`, `43.3` |
+| Low-confidence predictions (0.4–0.6) | — | false positives concentrate here; predictions with confidence ≥ 0.7 have precision about 0.98 |
+
+Many of the false-positive samples look like real stomata that annotators missed, so precision measured against the current labels is conservative. Sample galleries: [misses](../../../docs/images/fn_gallery_human.jpg), [false positives](../../../docs/images/fp_gallery_human.jpg).
+
+## 6. Post-training diagnostics and improvement attempts
+
+After v2, the following diagnostics and improvements were tried. All comparisons use the same 57 validation images and the same evaluation, and decisions are based on per-image paired tests or image-level bootstrap confidence intervals. **None of these attempts beat v2; the recommended model and inference method are unchanged.**
+
+| Attempt | Training needed? | Result | Decision | Details |
+|---|---|---|---|---|
+| Size × sharpness stratified diagnosis (three-axis decoupling) | No | Within the same size bin, the low-sharpness half has 4–7 points lower recall (40–70 px: 0.933 vs 0.969; ≥ 70 px: 0.878 vs 0.945; p < 1e-4). After controlling for size, contrast, density and border, and comparing only stomata within the same image, sharpness and contrast each still affect recall independently | Defocus really is an independent factor, but its effect is limited and concentrated in the blurriest quarter | [`docs/error_stratify_v2_threeaxis.md`](../../../docs/error_stratify_v2_threeaxis.md), [`docs/error_stratify_v2.md`](../../../docs/error_stratify_v2.md) |
+| Defocus blur + contrast-reduction augmentation | Yes (4 CPU training segments, including a control) | Against a matched control without augmentation, recall of the blurriest quarter rose by 1.2–1.4 points (95% CI excludes 0). Against v2, precision is about 1 point lower, F1 0.937 vs 0.941, count error 7.5% vs 6.6% (worse on 42/57 images, p ≈ 3e-5). New false positives are mostly blurred texture | Not adopted; weights archived in `models/stomata_yolov8n_p2_human_v3_defocus/` | [`docs/DEFOCUS_AUGMENT.md`](../../../docs/DEFOCUS_AUGMENT.md) |
+| SAHI vs built-in SlicedPredictor | No | SAHI (GREEDYNMM + IOS) F1 0.9405 vs 0.9410 for the built-in slicer (per-image p = 0.18), about 10% slower per image. SAHI with NMS + IOU reaches only F1 0.92 | Below the "F1 gain > 0.5 points" threshold; keep the built-in slicer and make it the default backend | [`docs/SAHI_COMPARISON.md`](../../../docs/SAHI_COMPARISON.md) |
+| Multi-scale TTA (1.0× + 1.25× / 1.5×) | No | Recall of < 40 px stomata rose by 2.5–3.3 points, but every fusion mode has F1 ≤ 0.9409, at about 2.5× the inference time | Not adopted; `stomata/dl/tta.py` kept as an optional tool | [`docs/TTA_COMPARISON.md`](../../../docs/TTA_COMPARISON.md) |
+| Splitting "two-in-one" boxes (two stomata detected as one box) | No (diagnosed first) | Only 9 of 937 misses (1.0%) are two-in-one, and those boxes are not larger than normal (median 1.1×). Even recovering all 91 adjacent misses would raise F1 only to about 0.944 | Not done | `scripts/fn_causes.py` |
+
+**Causes of misses** (v2, threshold 0.40, 937 misses in total, `scripts/fn_causes.py`):
+
+| Cause | Count | Share |
+|---|---|---|
+| a candidate box at the right place, but scored below 0.40 | 681 | 73% |
+| no candidate nearby at all (mostly defocused or low contrast) | 165 | 18% |
+| next to an already matched box (upper bound for touching or merging) | 91 | 10% |
+| of which: true two-in-one | 9 | 1% |
+
+**What these attempts show together:**
+
+1. **The main bottleneck is the model's scoring, not post-processing.** Nearly 3/4 of the misses were actually found by the model but scored too low. Whether by changing the tile merging (SAHI), fusing scales, or using augmentation to change how the model judges blurred objects, every gain in recall came with an equal number of new false positives. Under the current labels, the recall–precision trade-off has not improved.
+2. **Small stomata have a limited effect on overall F1.** Stomata under 40 px are only 1.4% (240, of which 71 are missed). Even recovering all of them without any new false positives would raise F1 by at most 0.22 points.
+3. **v2's numbers are slightly optimistic.** The control experiment showed that even without augmentation, continuing training from v2 falls back to F1 0.936. v2 is the checkpoint selected on the same validation set, so its 0.941 includes selection bias. Differences between approaches are therefore only suitable for relative comparison.
+
+## 7. Recommended next steps
+
+In order of expected benefit:
+
+1. **Build an independent test set**: e.g. 10 whole images never used for training or tuning, to remove the selection bias and compare v2 with the candidates fairly.
+2. **Review the labels**:
+   - complete `108.1_1`, `349.3` (training) and `221.2` (validation);
+   - review regions where false positives concentrate, especially blurred ones. Spot checks suggest about 1/4 to 1/3 of false positives are stomata the annotators missed; if so, precision is underestimated and the trade-offs between approaches need to be re-evaluated.
+3. **A larger model or higher input resolution** (needs a GPU): improving scoring without sacrificing precision is the only untried direction that targets the main bottleneck. On the current CPU one epoch takes about 17 minutes, which rules out larger models.
+4. **Not recommended** under the CPU budget: further tuning of augmentation, multi-scale TTA or split post-processing — the experiments above show these directions have a low ceiling.
+
+## 8. Usage
+
+```bash
+python scripts/dl_pipeline.py predict <image directory> \
+    --weights models/stomata_yolov8n_p2_human_v2/best.pt --conf 0.4 -o outputs_dl
+```
+
+The built-in `SlicedPredictor` is used by default; add `--sahi` to use official SAHI instead. Each image gets a detection overlay, and `stomata_dl.csv` lists every stoma's coordinates, major axis and confidence.

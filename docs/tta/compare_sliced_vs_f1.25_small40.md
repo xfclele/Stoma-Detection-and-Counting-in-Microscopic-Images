@@ -1,27 +1,27 @@
-# 模型对比：sliced_ic0.05（conf 0.4） vs f1.25_small40（conf 0.4）
+# 模型对比 / Model comparison: sliced_ic0.05（conf 0.4） vs f1.25_small40（conf 0.4）
 
-57 张验证图。
+57 张验证图 / validation images.
 
-| 模型 | P | R | F1 | 计数 MAE | 计数 MAPE | 计数偏差 |
+| 模型 Model | P | R | F1 | 计数 Count MAE | 计数 Count MAPE | 计数偏差 Count bias |
 |---|---|---|---|---|---|---|
 | sliced_ic0.05 | 0.9368 | 0.9452 | 0.9410 | 18.53 | 6.6% | +2.67 |
 | f1.25_small40 | 0.9366 | 0.9452 | 0.9409 | 18.61 | 6.63% | +2.75 |
 
-- 逐图 F1：f1.25_small40 更好 1 / 更差 4 / 持平 52，Wilcoxon p = 0.345
-- 逐图 |相对计数误差|：f1.25_small40 更小 0 / 更大 5，Wilcoxon p = 0.0431
+- 逐图 F1 / per-image F1：f1.25_small40 更好 better 1 / 更差 worse 4 / 持平 tied 52，Wilcoxon p = 0.345
+- 逐图 |相对计数误差| / per-image |relative count error|：f1.25_small40 更小 smaller 0 / 更大 larger 5，Wilcoxon p = 0.0431
 
-## 按清晰度四分位的召回
+## 按清晰度四分位的召回 / Recall by sharpness quartile
 
-| 分组 | n | sliced_ic0.05 召回 | f1.25_small40 召回 | 差值 | 95% CI（按图 bootstrap） |
+| 分组 Group | n | sliced_ic0.05 召回 recall | f1.25_small40 召回 recall | 差值 Diff | 95% CI（按图 bootstrap / image bootstrap） |
 |---|---|---|---|---|---|
-| Q1 最模糊 | 4273 | 0.899 | 0.899 | +0.000 | [+0.000, +0.000] |
+| Q1 最模糊 blurriest | 4273 | 0.899 | 0.899 | +0.000 | [+0.000, +0.000] |
 | Q2 | 4273 | 0.959 | 0.959 | +0.000 | [+0.000, +0.000] |
 | Q3 | 4273 | 0.960 | 0.960 | +0.000 | [+0.000, +0.001] |
-| Q4 最清晰 | 4273 | 0.963 | 0.963 | +0.000 | [+0.000, +0.000] |
+| Q4 最清晰 sharpest | 4273 | 0.963 | 0.963 | +0.000 | [+0.000, +0.000] |
 
-## 按尺寸档的召回
+## 按尺寸档的召回 / Recall by size bin
 
-| 分组 | n | sliced_ic0.05 召回 | f1.25_small40 召回 | 差值 | 95% CI（按图 bootstrap） |
+| 分组 Group | n | sliced_ic0.05 召回 recall | f1.25_small40 召回 recall | 差值 Diff | 95% CI（按图 bootstrap / image bootstrap） |
 |---|---|---|---|---|---|
 | <40 | 240 | 0.704 | 0.704 | +0.000 | [+0.000, +0.000] |
 | 40–50 | 3613 | 0.934 | 0.934 | +0.000 | [+0.000, +0.001] |
@@ -29,9 +29,9 @@
 | 60–70 | 4462 | 0.958 | 0.958 | +0.000 | [+0.000, +0.000] |
 | ≥70 | 1289 | 0.909 | 0.909 | +0.000 | [+0.000, +0.000] |
 
-## Q1 最模糊 × 尺寸
+## Q1 最模糊 × 尺寸 / Q1 blurriest × size
 
-| 分组 | n | sliced_ic0.05 召回 | f1.25_small40 召回 | 差值 | 95% CI（按图 bootstrap） |
+| 分组 Group | n | sliced_ic0.05 召回 recall | f1.25_small40 召回 recall | 差值 Diff | 95% CI（按图 bootstrap / image bootstrap） |
 |---|---|---|---|---|---|
 | Q1, <40 | 51 | 0.745 | 0.745 | +0.000 | [+0.000, +0.000] |
 | Q1, 40–50 | 906 | 0.882 | 0.882 | +0.000 | [+0.000, +0.000] |

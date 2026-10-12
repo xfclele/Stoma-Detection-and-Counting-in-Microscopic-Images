@@ -1,27 +1,27 @@
-# 模型对比：v2_b_op（conf 0.4） vs v3b_last（conf 0.4）
+# 模型对比 / Model comparison: v2_b_op（conf 0.4） vs v3b_last（conf 0.4）
 
-57 张验证图。
+57 张验证图 / validation images.
 
-| 模型 | P | R | F1 | 计数 MAE | 计数 MAPE | 计数偏差 |
+| 模型 Model | P | R | F1 | 计数 Count MAE | 计数 Count MAPE | 计数偏差 Count bias |
 |---|---|---|---|---|---|---|
 | v2_b_op | 0.9368 | 0.9452 | 0.9410 | 18.53 | 6.6% | +2.67 |
 | v3b_last | 0.9253 | 0.9479 | 0.9365 | 21.51 | 7.67% | +7.3 |
 
-- 逐图 F1：v3b_last 更好 14 / 更差 40 / 持平 3，Wilcoxon p = 1.67e-05
-- 逐图 |相对计数误差|：v3b_last 更小 15 / 更大 39，Wilcoxon p = 0.00153
+- 逐图 F1 / per-image F1：v3b_last 更好 better 14 / 更差 worse 40 / 持平 tied 3，Wilcoxon p = 1.67e-05
+- 逐图 |相对计数误差| / per-image |relative count error|：v3b_last 更小 smaller 15 / 更大 larger 39，Wilcoxon p = 0.00153
 
-## 按清晰度四分位的召回
+## 按清晰度四分位的召回 / Recall by sharpness quartile
 
-| 分组 | n | v2_b_op 召回 | v3b_last 召回 | 差值 | 95% CI（按图 bootstrap） |
+| 分组 Group | n | v2_b_op 召回 recall | v3b_last 召回 recall | 差值 Diff | 95% CI（按图 bootstrap / image bootstrap） |
 |---|---|---|---|---|---|
-| Q1 最模糊 | 4273 | 0.899 | 0.902 | +0.004 | [-0.004, +0.012] |
+| Q1 最模糊 blurriest | 4273 | 0.899 | 0.902 | +0.004 | [-0.004, +0.012] |
 | Q2 | 4273 | 0.959 | 0.960 | +0.002 | [-0.002, +0.005] |
 | Q3 | 4273 | 0.960 | 0.964 | +0.004 | [-0.000, +0.008] |
-| Q4 最清晰 | 4273 | 0.963 | 0.965 | +0.002 | [-0.002, +0.006] |
+| Q4 最清晰 sharpest | 4273 | 0.963 | 0.965 | +0.002 | [-0.002, +0.006] |
 
-## 按尺寸档的召回
+## 按尺寸档的召回 / Recall by size bin
 
-| 分组 | n | v2_b_op 召回 | v3b_last 召回 | 差值 | 95% CI（按图 bootstrap） |
+| 分组 Group | n | v2_b_op 召回 recall | v3b_last 召回 recall | 差值 Diff | 95% CI（按图 bootstrap / image bootstrap） |
 |---|---|---|---|---|---|
 | <40 | 240 | 0.704 | 0.742 | +0.037 | [+0.016, +0.059] |
 | 40–50 | 3613 | 0.934 | 0.944 | +0.010 | [+0.003, +0.017] |
@@ -29,9 +29,9 @@
 | 60–70 | 4462 | 0.958 | 0.957 | -0.001 | [-0.004, +0.002] |
 | ≥70 | 1289 | 0.909 | 0.912 | +0.002 | [-0.008, +0.013] |
 
-## Q1 最模糊 × 尺寸
+## Q1 最模糊 × 尺寸 / Q1 blurriest × size
 
-| 分组 | n | v2_b_op 召回 | v3b_last 召回 | 差值 | 95% CI（按图 bootstrap） |
+| 分组 Group | n | v2_b_op 召回 recall | v3b_last 召回 recall | 差值 Diff | 95% CI（按图 bootstrap / image bootstrap） |
 |---|---|---|---|---|---|
 | Q1, <40 | 51 | 0.745 | 0.784 | +0.039 | [-0.044, +0.114] |
 | Q1, 40–50 | 906 | 0.882 | 0.897 | +0.015 | [-0.001, +0.035] |

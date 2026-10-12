@@ -1,4 +1,6 @@
-# 训练报告：Stomata_Enhanced 人工标注数据
+# 训练报告：Stomata_Enhanced 人工标注数据 / Training Report: Stomata_Enhanced Human-Labelled Data
+
+**语言 / Language：** 中文（下文） · [English](#english-version)
 
 **当前推荐模型：`models/stomata_yolov8n_p2_human_v2/best.pt`（YOLOv8n-P2，6.3 MB），置信度阈值 0.40**——见第 6 节（数据整理后的 v2 训练）。
 第 1–5 节记录的是数据补全前（128 张训练图）的 v1 模型 `models/stomata_yolov8n_p2_human/`。
@@ -159,6 +161,173 @@ python scripts/eval_human.py --weights models/stomata_yolov8n_p2_human_v2/best.p
        -o outputs/eval_human/final --exclude 118.2 221.2                  # 评估 + 阈值扫描
 python scripts/error_analysis.py outputs/eval_human/final --conf 0.40     # 误差分析
 python scripts/fn_causes.py outputs/eval_human/final --conf 0.40                 # 漏检原因分类
+python scripts/plot_convergence.py runs/stomata/human_ft1/results.csv runs/stomata/human_ft2/results.csv \
+       runs/stomata/human_ft3_clean/results.csv runs/stomata/human_v2_b/results.csv -o docs/images/convergence_human.png
+```
+
+---
+
+# English version
+
+**Currently recommended model: `models/stomata_yolov8n_p2_human_v2/best.pt` (YOLOv8n-P2, 6.3 MB), confidence threshold 0.40** — see section 6 (v2 training after the data reorganisation).
+Sections 1–5 describe the v1 model `models/stomata_yolov8n_p2_human/`, trained before the data was completed (128 training images).
+
+## 1. Data structure
+
+`data/samples/pre-trainning/Stomata_Enhanced/`:
+
+| Part | Content | Notes |
+|---|---|---|
+| `data.yaml` | `nc: 1, names: [stomata]`, `train: train/images` | `path` is an absolute path on the original author's machine; the `train/images/` directory **did not exist** in the repository |
+| `train/labels/` | 234 label files, 74,765 boxes | matching images: 6 in the `train/` root, 122 in `pre-trainning/images/`; **106 labels had no image** |
+| `val/images` + `val/labels` | 59 pairs, 17,490 boxes | complete |
+
+- **Label format**: one line per box, `0 x1 y1 x2 y1 x2 y2 x1 y2` (normalised 4 corners); all are axis-aligned rectangles, not the usual `cx cy w h`. One degenerate box (zero width or height) in each split is dropped.
+- **Box size**: median long side about 50 px (5th–95th percentile 35–70 px; images are 2560×1920).
+- **Two enhancement styles**: `Stomata_Enhanced` and the 118 newly uploaded `pre-trainning/images` share one colour enhancement; the earliest 19 images are a grey high-contrast version. Both versions are geometrically identical (phase-correlation shift < 0.02 px), so one label set fits both.
+- **No train/validation overlap**; there is overlap with the earlier pseudo-label model's data: validation image `118.2` was in the pseudo-label model's training set and is excluded when evaluating that model.
+
+### Label-quality problems
+
+High-confidence model detections (≥ 0.7) more than 150 px from any human box were used to find whole unlabelled regions:
+
+| Image | Split | Problem | Action |
+|---|---|---|---|
+| `108.1_1` | training | hundreds of stomata, but only 3 boxes in the label (the label file may belong to another image) | removed from training |
+| `349.3` | training | the whole right side is unlabelled | removed from training |
+| `221.2` | validation | only the upper-left ~2/3 is labelled | metrics reported with and without 221.2 |
+
+No large unlabelled areas were found in the other 124 training and 57 validation images. Also, the original automatic pipeline's pseudo-labels agree with the human labels at only F1 0.88–0.92 (`118.2`, `573.2`), which caps the accuracy of the early pseudo-label model.
+
+## 2. Training
+
+Data: 126 training images → 1,512 tiles of 640×640 at original resolution (4×3, no overlap); 59 validation images → 708 tiles.
+Model: fine-tuned from the pseudo-label weights `models/stomata_yolov8n_p2/best.pt` (YOLOv8n-P2, CPU, batch 8).
+Because of the runtime limit, training ran in three segments of about 50 minutes and 6 epochs each (`time=0.85h`), each continuing from the previous one:
+
+| Segment | Start | Learning rate | Data | Last-epoch val mAP50 / mAP50-95 |
+|---|---|---|---|---|
+| ft1 | pseudo-label model | 0.003 | 128 images | 0.943 / 0.519 |
+| ft2 | ft1 | 0.0015 | 128 images | 0.947 / 0.512 |
+| ft3 | ft2 | 0.001 | 126 images (2 incompletely labelled removed) | 0.943 / 0.455 |
+
+![convergence](images/convergence_human.png)
+
+(The 4th segment in the plot is v2_b from section 6, trained on the completed dataset.)
+
+**Convergence**: each segment restarts mosaic augmentation and the metrics first drop, then recover to the same level in the last epochs with mosaic off (mAP50 ≈ 0.943–0.947); training loss keeps decreasing slowly while validation metrics are flat. At the current model size and input resolution the model has converged, and more epochs would not help materially. mAP50-95 is slightly lower in ft3, meaning boxes fit a little less tightly, which does not affect centre-point counting (see below).
+
+## 3. Test results (whole-image sliced inference, human ground truth)
+
+`scripts/eval_human.py`: whole images in 640 tiles, 20% overlap, centre-ownership de-duplication; one-to-one centre matching with tolerance 0.5 × box long side (about 25 px).
+57 validation images (excluding `118.2` and the incompletely labelled `221.2`), each model at its best-F1 threshold:
+
+| Model | Threshold | Precision | Recall | F1 | Count MAE | Count MAPE | Count bias |
+|---|---|---|---|---|---|---|---|
+| pseudo-label model (baseline) | 0.25 | 0.921 | 0.900 | 0.911 | 25.3 | 8.9% | −6.9 |
+| ft1 | 0.40 | 0.927 | 0.951 | 0.939 | 20.4 | 7.4% | +7.9 |
+| ft2 | 0.40 | 0.929 | 0.949 | 0.939 | 20.8 | 7.5% | +6.4 |
+| **ft3 (final)** | **0.45** | **0.935** | **0.944** | **0.939** | **19.0** | **6.8%** | **+3.1** |
+
+All 58 images including `221.2`: ft3 P 0.929 / R 0.945 / F1 0.937 / MAPE 7.6%.
+
+Per-image paired tests (Wilcoxon, relative count error per image): ft3 beats ft2 on 35/57 images (p = 0.014); ft3 beats the baseline on 36/57 (p = 0.078, not significant).
+**Note**: thresholds and models were both selected on this validation set, so the numbers are slightly optimistic; an unbiased estimate needs independently labelled images never used for tuning.
+
+## 4. Error analysis (ft3, threshold 0.45)
+
+Full tables are produced by `scripts/error_analysis.py`. Key points:
+
+- **Size**: recall for small stomata (long side < 40 px) is only 0.73 (245 in total); 0.94–0.96 for 40–70 px; 0.91 for ≥ 70 px.
+- **Density**: recall drops to 0.86 in dense clusters (≥ 5 neighbours within 100 px) and to 0.22 with ≥ 7 neighbours (few samples, 32).
+- **Border**: recall 0.89 for objects within 25 px of the image border (half stomata, where labelling conventions also vary).
+- **Confidence**: precision 0.98 for predictions ≥ 0.7, only 0.59–0.70 in the 0.4–0.6 range, where false positives concentrate.
+- **Images with concentrated errors**: `292.1` (−80), `23.2_1` (−68), `43.3`, `16.1` and `23.2` are mostly misses, mostly defocused, low-contrast grey fields; `214.1`, `573.2`, `112.3` and `115.1` are mostly over-counts.
+- **Samples**: misses (`images/fn_gallery_human.jpg`) are mostly blurred / low-contrast stomata plus a few clearly missed sharp ones; many false positives (`images/fp_gallery_human.jpg`) look like real stomata the annotators missed, the rest are round bubbles/cells and half stomata at tile edges. Precision against the current labels is therefore conservative.
+
+## 5. Suggested next steps (by expected benefit)
+
+1. **Upload the 106 missing training images**: about 80% more training data, the largest available gain.
+2. **Fix labels**: complete `108.1_1`, `349.3` and `221.2`; also review the images with the largest errors such as `292.1`, `23.2_1` and `214.1`.
+3. **Set aside an independent test set**: e.g. 10 whole images never used for training or tuning, for unbiased metrics.
+4. **With a GPU**, switch to YOLOv8s-P2 or a higher input resolution (e.g. 960 tiles) for < 40 px stomata and dense clusters; on the current CPU one epoch takes about 10 minutes, so larger models are impractical.
+5. For defocused fields, consider blur/contrast perturbation in preprocessing or augmentation, and report "defocused regions" as a separate category.
+
+## 6. After the data reorganisation (main branch, 2026-10-09): v2
+
+### New data layout
+
+```
+pre-trainning/
+├── Stomata_Enhanced/            human-labelled dataset
+│   ├── data.yaml
+│   ├── train/images  train/labels    234 pairs (all complete, all in the colour-enhanced version)
+│   └── val/images    val/labels      59 pairs (unchanged)
+└── model_review_samples/        20 review images from the original external counting pipeline (images/ overlays/ auto_count_results.csv)
+```
+
+- Label contents are exactly as before; the 106 labels that lacked images now all have them.
+- Checking the 106 new images with the v1 model found no large unlabelled areas. `108.1_1` (3 boxes) and `349.3` (right side unlabelled) are still excluded.
+- v2 training set: 232 images → 2,784 tiles, 71,525 boxes (about 1.8× v1).
+
+### Independent test: v1 on the 106 new images
+
+These 106 images were never used for v1's training or threshold selection, so they form a true independent test set. With the threshold fixed in advance at 0.45:
+
+| Data | Precision | Recall | F1 | Count MAPE |
+|---|---|---|---|---|
+| 57 validation images (threshold chosen here) | 0.935 | 0.944 | 0.939 | 6.8% |
+| **106 new images (independent)** | **0.934** | **0.944** | **0.939** | **7.3%** |
+
+The two are nearly identical: choosing the threshold on the validation set did not make the validation numbers noticeably optimistic, and the newly uploaded labels follow the same conventions as the old ones.
+
+### v2 training
+
+| Segment | Start | Settings | Last-epoch val mAP50 / mAP50-95 | Whole-image F1 (best threshold) |
+|---|---|---|---|---|
+| v2_a | v1 | lr0 0.002, mosaic on (off in the last epoch) | 0.944 / 0.507 | 0.9345 (threshold 0.35) |
+| **v2_b** | v1 | lr0 0.0005, mosaic off | **0.950** / 0.508 | **0.9410** (threshold 0.40) |
+
+v2_a was actually worse than v1 (per-image F1 worse on 45/57 images, p < 0.001): restarting a converged model with a larger learning rate and few epochs perturbed it and left no time to recover.
+v2_b continued from v1 with a small learning rate and mosaic off; per-image F1 is better than v1 on 39/57 images (Wilcoxon p = 0.011); per-image count error 6.8% → 6.6% (p = 0.20, not significant).
+
+### v2 final results (57 validation images, threshold 0.40)
+
+| Model | Precision | Recall | F1 | Count MAE | Count MAPE | Count bias |
+|---|---|---|---|---|---|---|
+| v1 (threshold 0.45) | 0.935 | 0.944 | 0.939 | 19.0 | 6.8% | +3.1 |
+| **v2 (threshold 0.40)** | **0.937** | **0.945** | **0.941** | **18.5** | **6.6%** | **+2.7** |
+
+Note: the 106 new images were used to train v2, so v2 currently has **no** independent test set; the numbers above still use a threshold chosen on the validation set.
+
+### Conclusions
+
+- Doubling the data gave only a small gain (F1 +0.2 points); the ceiling for YOLOv8n-P2 on this data is about F1 0.94 with a count error of 6–7%.
+- Error patterns are the same as for v1: recall about 0.70 for < 40 px stomata, about 0.86 for clusters with ≥ 5 neighbours, and whole defocused / low-contrast fields missed (`292.1`, `23.2_1`, `16.1`, `43.3`).
+- Further gains need: a larger model or higher input resolution (needs a GPU); augmentation for defocused fields; completed labels for `108.1_1`, `349.3` and `221.2`; and a new set of independent test images never used in training.
+
+## 7. Post-training diagnostics and improvement attempts (after v2)
+
+Summary in section 6 of [`data/samples/pre-trainning/TRAINING_REPORT.md`](../data/samples/pre-trainning/TRAINING_REPORT.md); details:
+
+- **Stratified diagnosis**: [`error_stratify_v2_threeaxis.md`](error_stratify_v2_threeaxis.md), [`error_stratify_v2.md`](error_stratify_v2.md). Within the same size bin, defocus and contrast each still affect recall independently; the defocus effect is 4–7 percentage points.
+- **Defocus and contrast augmentation**: [`DEFOCUS_AUGMENT.md`](DEFOCUS_AUGMENT.md). Against a matched control the augmentation works (recall of the blurriest quarter +1.2–1.4 points), but against v2 both F1 and count error are worse, so it is not adopted.
+- **SAHI vs SlicedPredictor**: [`SAHI_COMPARISON.md`](SAHI_COMPARISON.md). F1 0.9405 vs 0.9410, SAHI slower; the built-in slicer stays.
+- **Multi-scale TTA**: [`TTA_COMPARISON.md`](TTA_COMPARISON.md). Small-stoma recall +2.5–3.3 points but no F1 gain; not adopted.
+- **Causes of misses** (`scripts/fn_causes.py`):
+  - 73% of misses have a candidate box at the right place, scored below 0.40;
+  - 18% have no candidate nearby;
+  - 10% are next to an already matched box;
+  - true "two-in-one" merges are only 1%, so no splitting post-processing is added.
+
+## Reproduction
+
+```bash
+python scripts/prepare_human_dataset.py -o datasets/stomata_human_v2       # pair data, tile, manifest
+python scripts/eval_human.py --weights models/stomata_yolov8n_p2_human_v2/best.pt \
+       -o outputs/eval_human/final --exclude 118.2 221.2                  # evaluation + threshold sweep
+python scripts/error_analysis.py outputs/eval_human/final --conf 0.40     # error analysis
+python scripts/fn_causes.py outputs/eval_human/final --conf 0.40                 # causes of misses
 python scripts/plot_convergence.py runs/stomata/human_ft1/results.csv runs/stomata/human_ft2/results.csv \
        runs/stomata/human_ft3_clean/results.csv runs/stomata/human_v2_b/results.csv -o docs/images/convergence_human.png
 ```

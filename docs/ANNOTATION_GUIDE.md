@@ -1,4 +1,6 @@
-# 极简标注指南（小样本 / Few-shot）
+# 极简标注指南（小样本 / Few-shot） / Minimal Annotation Guide
+
+**语言 / Language：** 中文（下文） · [English](#english-version)
 
 目标：用尽量少的人工（几张整图的校正）得到足以微调 YOLOv8-P2 的训练集。
 
@@ -59,3 +61,67 @@ python scripts/dl_pipeline.py train datasets/stomata/data.yaml --epochs 150 --fr
 必须留出**至少 1 张完全独立、完整标注**的图像作为测试集（不参与任何调参），
 用 `python scripts/count_stomata.py ... --eval test_points.json` 或 `stomata.evaluation.match_points` 计算 P/R/F1。
 仓库自带的 `data/annotations/*_partial.json` 只标注了少数小区域，而且参与了阶段一的调参，**不能**当独立测试集用。
+
+---
+
+# English version
+
+Goal: get a training set good enough to fine-tune YOLOv8-P2 with as little manual work as possible (correcting a few whole images).
+
+## 1. What to label: points, not boxes
+* Click once at the **centre of each stoma (the middle of the slit)**; no boxes, polygons or orientation are needed;
+* boxes are generated automatically as squares with `side = major axis × 1.1`, where the major axis comes from the stage-1 measurement or the image median (`points_to_boxes`);
+* point labelling is much faster than drawing boxes and more consistent (a centre is far less ambiguous than a box edge).
+
+## 2. Labelling rules (a consistent convention matters most)
+
+| Case | Action |
+|---|---|
+| sharp, complete stoma | label it |
+| slightly defocused but both guard cells visible | label it |
+| badly defocused, only a dark blob | put it in `ignore` (neutral in evaluation) |
+| more than half cut off by the image border | do not label (`clip_boxes_to_tile` drops truncated objects in training) |
+| two touching stomata | label both centres |
+| ellipse-like cells enclosed by cell walls, bubbles, debris | do not label — these are exactly the negatives the model must learn to reject |
+
+## 3. Recommended workflow: "pre-label → correct"
+
+```bash
+# 1) generate stage-1 pre-labels (points + major axis); margin exclusion off so visible border stomata are not lost
+python scripts/dl_pipeline.py prelabel images/ -o labels_points/
+```
+
+2) Open `labels_points/*.json` (format below) in any tool that supports point labels and correct each image: **delete** false positives and **add** misses.
+   Stage-1 points have fairly high precision but limited recall (about half of the obvious stomata are found in whole images, see README), so correction is mostly adding misses; existing points mostly just need confirming.
+   CVAT and Label Studio both import points; a small script converts between formats:
+
+```json
+{"image": "leaf_01.jpg", "points": [[1407.0, 467.0], [1483.0, 486.0]], "major_px": [36.2, 41.0]}
+```
+
+3) Build the tile dataset and train:
+
+```bash
+python scripts/dl_pipeline.py build labels_points/ --images images/ -o datasets/stomata
+python scripts/dl_pipeline.py train datasets/stomata/data.yaml --epochs 150 --freeze 10
+```
+
+## 4. How much is enough?
+
+| Amount | Expectation |
+|---|---|
+| 1 whole 2000×1500 image (≈ 300 stomata → ≈ 12 tiles of 640) | the workflow runs end to end; limited generalisation to new samples (other leaves/magnifications) |
+| 3–5 images covering different leaves / focal planes / lighting | recommended starting point for few-shot fine-tuning |
+| 10–20 images including different magnifications | the backbone can be unfrozen for full training, as a production model |
+
+A single image also works: `build_yolo_dataset` falls back to a spatial split (the rightmost tile column is validation, and overlapping training tiles are dropped to prevent leakage).
+
+## 5. Active-learning iterations
+1. pre-label the next batch with the round-1 model;
+2. correct detections with **confidence between 0.25 and 0.5** first, and regions where stage 1 and stage 2 disagree a lot;
+3. merge the data and retrain; repeat until a new batch needs little correction.
+
+## 6. Evaluation set
+Set aside **at least one fully independent, completely labelled** image as a test set (never used for any tuning),
+and compute P/R/F1 with `python scripts/count_stomata.py ... --eval test_points.json` or `stomata.evaluation.match_points`.
+The repository's `data/annotations/*_partial.json` label only a few small regions and were used to tune stage 1, so they **cannot** serve as an independent test set.

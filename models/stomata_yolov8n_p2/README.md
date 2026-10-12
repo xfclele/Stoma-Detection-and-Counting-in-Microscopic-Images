@@ -1,4 +1,6 @@
-# stomata_yolov8n_p2 — 预训练气孔检测模型（初版）
+# stomata_yolov8n_p2 — 预训练气孔检测模型（初版） / pre-trained stomata detector (first version)
+
+**语言 / Language：** 中文（下文） · [English](#english-version)
 
 | 项目 | 内容 |
 |---|---|
@@ -38,5 +40,50 @@ python scripts/dl_pipeline.py predict images/ --weights models/stomata_yolov8n_p
 from ultralytics import YOLO
 YOLO("runs/stomata/pretrain_v8n_p2/weights/last.pt").train(resume=True)   # 需要原训练目录中的 last.pt
 # 或以本权重为起点重新微调：
+YOLO("models/stomata_yolov8n_p2/best.pt").train(data="datasets/stomata_pre/data.yaml", epochs=40, device="cpu")
+```
+
+---
+
+# English version
+
+| Item | Value |
+|---|---|
+| Architecture | YOLOv8n-P2 (adds a stride-4 small-object head), 2.9 M parameters, initialised from COCO, nothing frozen |
+| Training data | 16 images of 2560×1920 from `data/samples/pre-trainning` → 279 tiles of 640×640, 6,818 boxes |
+| Validation data | 4 whole images (137.1, 49.2, 573.2, 9.3), not used for training |
+| Label source | **pseudo-labels** recovered from the overlays of an external automatic counting pipeline (`scripts/prepare_pretraining.py`), not human ground truth |
+| Training | CPU, batch 8, 100 epochs planned; stopped at epoch 61 by the runtime limit; `best.pt` is from epoch 54 (highest validation mAP50-95) |
+| Files | `best.pt` (optimizer state stripped, 6.3 MB, plain git file), `results.csv` (per-epoch metrics), `args.yaml` (training arguments) |
+
+## Metrics
+
+Tile validation set (epoch 54): P 0.891, R 0.938, mAP50 0.963, mAP50-95 0.664.
+
+Whole-image sliced inference (`scripts/eval_pretrain.py`, valid epidermis area only, matching tolerance 0.35 × major axis):
+
+| Confidence threshold | Precision | Recall | F1 |
+|---|---|---|---|
+| 0.25 | 0.813 | 0.980 | 0.889 |
+| 0.40 | 0.847 | 0.966 | 0.903 |
+| 0.55 | 0.886 | 0.944 | 0.914 |
+
+These metrics measure agreement with the original automatic counting pipeline. Visual inspection shows that some "false positives" are real
+stomata the original pipeline missed, so true precision should be higher than shown, but confirming this needs one fully human-labelled image.
+Images like `49.2`, with large masked areas and scattered stomata, are the weakest (F1 ≈ 0.78).
+
+## Usage
+
+```bash
+# built-in sliced inference + centre-ownership de-duplication (no sahi needed)
+python scripts/dl_pipeline.py predict images/ --weights models/stomata_yolov8n_p2/best.pt --no-sahi --conf 0.4 -o outputs_dl
+```
+
+## Continue training
+
+```python
+from ultralytics import YOLO
+YOLO("runs/stomata/pretrain_v8n_p2/weights/last.pt").train(resume=True)   # needs last.pt from the original training directory
+# or fine-tune again starting from these weights:
 YOLO("models/stomata_yolov8n_p2/best.pt").train(data="datasets/stomata_pre/data.yaml", epochs=40, device="cpu")
 ```

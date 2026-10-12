@@ -1,4 +1,6 @@
-# 叶表皮显微图像气孔（Stomata）自动检测与计数
+# 叶表皮显微图像气孔（Stomata）自动检测与计数 / Automatic Stomata Detection and Counting in Leaf-Epidermis Micrographs
+
+**语言 / Language：** 中文（下文） · [English](#english-version)
 
 面向高分辨率叶表皮透射显微图像的气孔检测、定位与计数工具，分两个阶段：
 
@@ -214,3 +216,232 @@ tests/               单元测试 + 合成图端到端测试（pytest）
 调阈值时请用 `--eval` 在自己的标注区域上核对，不要只凭一张图目测。
 
 运行测试：`python -m pytest -q`
+
+---
+
+# English version
+
+A tool for detecting, locating and counting stomata in high-resolution transmitted-light micrographs of leaf epidermis. It has two stages:
+
+| Stage | Method | Dependencies | Use when |
+|---|---|---|---|
+| **1: training-free baseline** | flat-field correction + CLAHE + rotated NCC with a self-bootstrapped template + DoH blobs + watershed + multi-criteria geometric/structural hard filters | OpenCV / scikit-image / SciPy | no labels; quick estimates; pre-labels for the deep model |
+| **2: production deep learning** | YOLOv8-P2 (small-object head) + sliced inference, few-shot fine-tuning from point labels | + Ultralytics / SAHI (GPU) | high accuracy, with some manual correction |
+
+![pipeline](docs/images/pipeline_overview.jpg)
+
+---
+
+## Quick start
+
+```bash
+pip install -r requirements.txt
+
+# single image: CSV + annotated image + four-panel pipeline figure + P/R/F1 against reference labels
+python scripts/count_stomata.py data/samples/leaf_epidermis_01.jpg -o outputs --visualize \
+       --eval data/annotations/leaf_epidermis_01_partial.json
+
+# 20x colour TIFF series: calibrate µm/px from the micrometer image and give stoma size in µm
+python scripts/count_stomata.py "data/samples/test0*.tif" -o outputs \
+       --micrometer "data/samples/stage micrometer 20x objectivetif.tif" --stoma-size-um 28
+
+# known pixel size (exports µm and stomatal density /mm²)
+python scripts/count_stomata.py "images/*.tif" -o outputs --um-per-px 0.50 --stoma-size-um 28
+```
+
+```python
+import cv2
+from stomata import StomataCounter, DetectorConfig, visualize_pipeline, calibrate_stage_micrometer
+
+cal = calibrate_stage_micrometer(cv2.imread("data/samples/stage micrometer 20x objectivetif.tif"))
+cfg = DetectorConfig(um_per_px=cal.um_per_px, expected_major_um=28, margin_exclusion=True)
+counter = StomataCounter(cfg)
+reports = counter.run("data/samples/test001.tif")          # file / directory / glob
+counter.export_csv(reports, "outputs/stomata.csv")          # per-stoma detail + summary
+rep = reports[0]
+print(rep.count, rep.rows()[:3])                            # count, coordinates, major axis
+visualize_pipeline(cv2.imread("data/samples/test001.tif"), rep.result, save_path="outputs/pipeline.png",
+                   zoom=(300, 150, 750, 480))
+```
+
+Output files:
+
+| File | Content |
+|---|---|
+| `stomata_detections.csv` | one row per stoma: `image, id, x, y, major_axis_px, minor_axis_px, angle_deg, score, major_source, major_axis_um, minor_axis_um` |
+| `stomata_detections_summary.csv` | one row per image: count, density (/mm²), mean/SD/median major axis, candidate count, border exclusions |
+| `*_detections.jpg` | detection ellipses overlaid on the image |
+| `*_pipeline.png` | four panels: original / preprocessed / candidate heat map + watershed / final detections (`visualize_pipeline()`) |
+| `*_points.json` | detections as point labels, usable directly as pre-labels for manual correction |
+
+**The only parameter you must set is the stoma size**: `--expected-major` (pixels, default 34) or `--stoma-size-um` plus calibration.
+Approximate values for the three sample styles: `leaf_epidermis_01.jpg` ≈ 34 px, grey JPGs such as `1.1.jpg` ≈ 40 px,
+20x colour TIFF ≈ 56 px (≈ 28 µm at 0.50 µm/px).
+
+---
+
+## Stage 1: training-free pipeline
+
+Code: `stomata/preprocessing.py`, `stomata/templates.py`, `stomata/detector.py`
+
+### 1. Preprocessing
+A transmitted-light image can be written as `I = L·R + n` (L = vein shading / illumination, R = tissue transmittance).
+* **Flat-field correction**: `I / (G_σ=40 * I)` turns multiplicative shading into a constant. This is also why a global
+  threshold / Otsu cannot work: the same kind of stoma has very different grey levels in bright areas and in dark vein areas.
+* **CLAHE** (16×16 tiles) evens out local contrast; a **DoG** band-pass (σ = 1/10) is kept for visualisation and extensions.
+* **Black-hat**: `closing(I) − I` extracts dark lines narrower than 9 px (guard-cell walls, slits, epidermal cell walls);
+  their local density is the "dark-structure energy".
+
+### 2. Candidate localisation and segmentation
+* **Self-bootstrapped template (fully unsupervised)**: a synthetic elliptical-ring template first finds the 60 most
+  confident stomata on the dark-structure map; they are aligned by second-moment orientation, averaged and 4-fold
+  symmetrised into a data-driven template, then aligned by best matching angle for one more iteration. The template can
+  be saved (`--save-template`) and reused for a whole batch.
+* **Rotation × scale × aspect NCC**: 18 angles × 3 scales × 2 aspect ratios. NCC is invariant to local brightness/contrast
+  and responds only to structural shape; the result is multiplied by a dark-structure energy gate to suppress noise
+  correlation on blank background.
+* **Multi-scale Hessian blobs (DoH)**: `σ⁴(LxxLyy − Lxy²)` on the inverted flat-field image, σ ≈ major/4.5 – major/3.
+  A stoma is a dark elliptical blob with two principal curvatures of the same sign and similar size; cell walls and veins
+  are line-like (det ≈ 0) and are suppressed. DoH can serve as the candidate map (`candidate_mode="doh"`) and is used as
+  a verification feature by default.
+* **Tiling large images**: the response map is computed in 2048 px tiles with 96 px overlap, **only the core of each tile
+  is written back, and peaks are found once on the stitched map**, so stomata on tile borders are never counted twice
+  (`tests/test_detector.py::test_tiled_response_equals_full` checks that the stitched map equals the whole-image map pixel by pixel).
+* **Local maxima → adaptive-threshold mask → distance transform + marker-controlled watershed** separate touching stomata;
+  each candidate is then refined within ±4 px, ±5° and finer scales/aspects.
+
+### 3. Geometric and structural hard filters (all thresholds configurable in `DetectorConfig`)
+
+| Criterion (default) | Physical meaning | Mainly rejects |
+|---|---|---|
+| NCC score ≥ 0.30 | shape similarity to the stoma template | noise |
+| **DoH blob strength** ≥ 0.15 | is the candidate a dark elliptical blob? | **cell-wall junctions, single arcs** |
+| **Axial end ratio** ≤ 0.85 | response at ±0.8L along the major axis / centre response. A stoma has ends; vein stripes continue along the axis (≈ 1) | **veins, parallel fibres** |
+| **Structure-tensor coherence** ≤ 0.70 | orientation consistency in a σ = 16 neighbourhood; parallel texture → 1 | veins, fibre bundles |
+| Interior darkness ≤ −0.10 | mean grey inside the ellipse − outer ring | blank areas, bright spots |
+| Area ratio / eccentricity ≤ 0.99 / solidity ≥ 0.3 / inertia ratio | shape of the watershed region (skipped for tiny regions) | degenerate line-like responses |
+| Ray closure / ellipse-fit residual (measurement only by default) | on 32 rays, "bright guard cell → dark outer wall → rising outside"; least-squares ellipse through the valley points | optional: `min_ray_coverage`, `require_ellipse_fit=True` |
+
+The ray ellipse fit gives the **measured major-axis diameter** (`major_source = ellipse`); if the fit fails, the template-scale
+estimate is used (`template`). A final centre-distance NMS treats centres closer than 0.75 × minor axis as the same stoma.
+
+### 4. Margin exclusion
+With `margin_exclusion=True` (default), incomplete stomata at the image border are removed, using one of two rules:
+* `margin_mode="bbox"`: reject if the bounding box of the rotated ellipse leaves the image (or the `margin_px` safety margin);
+* `margin_mode="center"`: reject if the centre is closer than `margin_px` (default 0.5 × major axis) to the border.
+
+### 5. Physical scale calibration
+`stomata/calibration.py::calibrate_stage_micrometer()`: autocorrelation of the tick profile of a micrometer image gives an
+initial period; each tick is located (sub-pixel), outlier ticks are removed iteratively and a linear fit gives the period. For
+the sample `stage micrometer 20x objectivetif.tif` the result is **19.90 px/division → 0.503 µm/px** (61 ticks, residual 0.47 px,
+assuming 10 µm per division; use `--division-um` if your micrometer differs).
+
+### 6. Evaluation interface
+`stomata/evaluation.py`: `match_points()` performs one-to-one Hungarian point matching (distance ≤ tol);
+**duplicate detections count as FP** and `ignore` points are supported. `evaluate_against_annotation()` supports partial
+annotations that label only some rectangles. The CLI default tolerance is 0.35 × expected major axis.
+
+---
+
+## Results (please read critically)
+
+Reference labels are in `data/annotations/`: manually verified **local rectangles** covering three imaging styles, 41 stomata in total:
+
+| Image | Style | Expected major | Whole-image count | Reference-region P | R | F1 | Time per image* |
+|---|---|---|---|---|---|---|---|
+| `leaf_epidermis_01.jpg` | grey, 2000×1500 | 34 px | 301 | 0.81 | 0.74 | 0.77 | ~21 s |
+| `1.1.jpg` | high-contrast grey, 2560×1920 | 40 px | 212 | 0.56 | 0.63 | 0.59 | ~39 s |
+| `test001.tif` | 20x colour, 1360×1024 | 56 px | 53 | 1.00 | 0.70 | 0.82 | ~8 s |
+
+\* measured on the CPU of this development container.
+
+Caveats:
+* **The reference set is tiny and the default thresholds were calibrated jointly on these three regions**, so the table is
+  closer to training-set performance than to an unbiased estimate.
+* **Visual inspection of whole images shows much lower recall than the table**: on `1.1.jpg` and `test001.tif` only about half of
+  the obvious stomata are found. Misses are mostly defocused, widely open or stomata merged with surrounding dark structures;
+  false positives are mostly ellipse-like cells enclosed by cell walls and vein edges.
+* Imaging styles differ a lot: for each batch at least set the stoma size correctly, and ideally check the thresholds on a few labels.
+* On **synthetic images** with uneven illumination, random cell walls and vein stripes (`tests/synthetic.py`) P = R = 1.0,
+  so the algorithm logic is correct; the difficulty in real images comes from imaging.
+
+**Conclusion**: stage 1 is suitable for quick estimates without labels and as a **pre-labelling tool** for stage 2.
+For publishable quantitative results, fine-tune the deep model on a small amount of manually corrected data as described
+below and evaluate on independently labelled whole images.
+
+---
+
+## Trained models
+
+| Weights | Training data | Validation (human labels, 57 whole images) |
+|---|---|---|
+| `models/stomata_yolov8n_p2_human_v2/best.pt` (**recommended**, conf 0.40) | 232 human-labelled Stomata_Enhanced images | P 0.937 / R 0.945 / F1 0.941, count error 6.6% |
+| `models/stomata_yolov8n_p2_human_v3_defocus/best.pt` (archived) | same + defocus blur augmentation | P 0.928 / R 0.947 / F1 0.937, count error 7.5%; higher recall for blurred and small stomata, see `docs/DEFOCUS_AUGMENT.md` |
+| `models/stomata_yolov8n_p2_human/best.pt` (conf 0.45) | 126 human-labelled Stomata_Enhanced images | P 0.935 / R 0.944 / F1 0.939, count error 6.8%; on 106 independent new images F1 0.939, count error 7.3% |
+| `models/stomata_yolov8n_p2/best.pt` | pseudo-labels from an external automatic pipeline, 16 images | P 0.921 / R 0.900 / F1 0.911, count error 8.9% |
+
+Data structure, label issues, convergence curves and error analysis: [`docs/TRAINING_REPORT.md`](docs/TRAINING_REPORT.md).
+
+## Stage 2: production deep learning
+
+See [`docs/DEEP_LEARNING.md`](docs/DEEP_LEARNING.md) and [`docs/ANNOTATION_GUIDE.md`](docs/ANNOTATION_GUIDE.md). In short:
+
+* **Architecture**: **YOLOv8s-P2** (adds a stride-4 P2 detection head). The task needs per-object coordinates + major axis,
+  which a detector gives directly; stomata are of moderate density with separable boundaries, so density-estimation methods
+  such as CSRNet/FIDTM, which are good only at totals, are not needed. Use YOLOv8-OBB to regress orientation.
+* **No whole-image downscaling**: training uses 640×640 tiles (20% overlap) at original resolution; inference tiles the same way,
+  shifts results back to the full image and removes duplicates. By default the built-in `SlicedPredictor` is used, with
+  "centre ownership" de-duplication: each object belongs only to the tile whose core contains its centre. Official SAHI
+  (IoS + GREEDYNMM merging, `--sahi`) is also available. The controlled comparison in `docs/SAHI_COMPARISON.md` shows no F1
+  gain from SAHI (0.9405 vs 0.9410) and ~10% slower inference.
+* **Few-shot workflow**: stage-1 pre-labels → add/remove points in a point-labelling tool → points to boxes →
+  fine-tune with a frozen backbone (`freeze=10`, `degrees=180` rotation augmentation) → pre-label the next batch with the
+  stage-2 model (active learning).
+
+```bash
+python scripts/dl_pipeline.py prelabel images/ -o labels_points/          # 1. pre-label
+#   ... manually correct labels_points/*.json ...
+python scripts/dl_pipeline.py build labels_points/ --images images/ -o datasets/stomata   # 2. tile dataset
+python scripts/dl_pipeline.py train datasets/stomata/data.yaml --epochs 150            # 3. fine-tune (GPU)
+python scripts/dl_pipeline.py predict images/ --weights runs/stomata/yolov8s_p2/weights/best.pt -o outputs_dl  # 4. sliced inference (SlicedPredictor by default)
+```
+
+> Stage-2 training and inference have actually been run in this repository: CPU training, SAHI 0.12.8 / Ultralytics 8.4.
+> Results are in the model table above and in `docs/`; dataset building and built-in sliced inference / de-duplication have unit tests.
+
+---
+
+## Repository layout
+
+```
+stomata/
+  preprocessing.py   flat-field correction, CLAHE, DoG, black-hat, Hessian blob map
+  templates.py       synthetic template, bootstrapped data template, rotation/scale/aspect template bank
+  detector.py        ClassicalStomataDetector and DetectorConfig (stage-1 core)
+  counter.py         StomataCounter: batch loading, counting, CSV export
+  visualize.py       visualize_pipeline(), draw_detections()
+  evaluation.py      Precision / Recall / F1, point matching, partial-region evaluation
+  calibration.py     micrometer µm/px calibration
+  dl/                stage 2: dataset tiling, YOLOv8-P2 training, SAHI / built-in sliced inference
+scripts/
+  count_stomata.py   stage-1 command line
+  dl_pipeline.py     stage-2 command line (prelabel / build / train / predict)
+data/samples/        sample images (including the micrometer image)
+data/annotations/    partial-region point labels (reference set)
+tests/               unit tests + end-to-end tests on synthetic images (pytest)
+```
+
+## Tuning tips
+
+| Symptom | Adjustment |
+|---|---|
+| different magnification | first set `expected_major_px` correctly (or `--stoma-size-um` + calibration); it drives bootstrapping, scale search and seed spacing |
+| many misses | lower `min_blob` (0.10) and `min_score` (0.25), relax `max_end_ratio` (0.9) |
+| false positives on veins | lower `max_end_ratio` (0.75) or `max_coherence` (0.6) |
+| false positives on cell walls | raise `min_blob` (0.25), or set `min_ray_coverage=0.25` / `require_ellipse_fit=True` |
+| widely open stomata missed | `aspects=(1.0, 1.35, 1.7)` and add 1.8 to `refine_aspects` |
+| whole batch under the same conditions | `--share-template` or `--save-template` / `--template` to reuse the template for more consistent results |
+
+When tuning thresholds, check them with `--eval` on your own labelled regions rather than by eye on a single image.
+
+Run the tests: `python -m pytest -q`

@@ -1,27 +1,27 @@
-# 模型对比：sliced_ic0.05（conf 0.4） vs sahi_nms_ic0.05（conf 0.45）
+# 模型对比 / Model comparison: sliced_ic0.05（conf 0.4） vs sahi_nms_ic0.05（conf 0.45）
 
-57 张验证图。
+57 张验证图 / validation images.
 
-| 模型 | P | R | F1 | 计数 MAE | 计数 MAPE | 计数偏差 |
+| 模型 Model | P | R | F1 | 计数 Count MAE | 计数 Count MAPE | 计数偏差 Count bias |
 |---|---|---|---|---|---|---|
 | sliced_ic0.05 | 0.9368 | 0.9452 | 0.9410 | 18.53 | 6.6% | +2.67 |
 | sahi_nms_ic0.05 | 0.9119 | 0.9348 | 0.9232 | 23.86 | 8.35% | +7.54 |
 
-- 逐图 F1：sahi_nms_ic0.05 更好 2 / 更差 55 / 持平 0，Wilcoxon p = 6.7e-11
-- 逐图 |相对计数误差|：sahi_nms_ic0.05 更小 12 / 更大 43，Wilcoxon p = 3.62e-05
+- 逐图 F1 / per-image F1：sahi_nms_ic0.05 更好 better 2 / 更差 worse 55 / 持平 tied 0，Wilcoxon p = 6.7e-11
+- 逐图 |相对计数误差| / per-image |relative count error|：sahi_nms_ic0.05 更小 smaller 12 / 更大 larger 43，Wilcoxon p = 3.62e-05
 
-## 按清晰度四分位的召回
+## 按清晰度四分位的召回 / Recall by sharpness quartile
 
-| 分组 | n | sliced_ic0.05 召回 | sahi_nms_ic0.05 召回 | 差值 | 95% CI（按图 bootstrap） |
+| 分组 Group | n | sliced_ic0.05 召回 recall | sahi_nms_ic0.05 召回 recall | 差值 Diff | 95% CI（按图 bootstrap / image bootstrap） |
 |---|---|---|---|---|---|
-| Q1 最模糊 | 4273 | 0.899 | 0.878 | -0.021 | [-0.028, -0.014] |
+| Q1 最模糊 blurriest | 4273 | 0.899 | 0.878 | -0.021 | [-0.028, -0.014] |
 | Q2 | 4273 | 0.959 | 0.951 | -0.008 | [-0.011, -0.005] |
 | Q3 | 4273 | 0.960 | 0.954 | -0.006 | [-0.010, -0.003] |
-| Q4 最清晰 | 4273 | 0.963 | 0.957 | -0.006 | [-0.010, -0.003] |
+| Q4 最清晰 sharpest | 4273 | 0.963 | 0.957 | -0.006 | [-0.010, -0.003] |
 
-## 按尺寸档的召回
+## 按尺寸档的召回 / Recall by size bin
 
-| 分组 | n | sliced_ic0.05 召回 | sahi_nms_ic0.05 召回 | 差值 | 95% CI（按图 bootstrap） |
+| 分组 Group | n | sliced_ic0.05 召回 recall | sahi_nms_ic0.05 召回 recall | 差值 Diff | 95% CI（按图 bootstrap / image bootstrap） |
 |---|---|---|---|---|---|
 | <40 | 240 | 0.704 | 0.688 | -0.017 | [-0.042, +0.000] |
 | 40–50 | 3613 | 0.934 | 0.921 | -0.013 | [-0.018, -0.008] |
@@ -29,9 +29,9 @@
 | 60–70 | 4462 | 0.958 | 0.948 | -0.010 | [-0.014, -0.007] |
 | ≥70 | 1289 | 0.909 | 0.896 | -0.013 | [-0.020, -0.006] |
 
-## Q1 最模糊 × 尺寸
+## Q1 最模糊 × 尺寸 / Q1 blurriest × size
 
-| 分组 | n | sliced_ic0.05 召回 | sahi_nms_ic0.05 召回 | 差值 | 95% CI（按图 bootstrap） |
+| 分组 Group | n | sliced_ic0.05 召回 recall | sahi_nms_ic0.05 召回 recall | 差值 Diff | 95% CI（按图 bootstrap / image bootstrap） |
 |---|---|---|---|---|---|
 | Q1, <40 | 51 | 0.745 | 0.725 | -0.020 | [-0.075, +0.000] |
 | Q1, 40–50 | 906 | 0.882 | 0.857 | -0.025 | [-0.037, -0.014] |

@@ -1,4 +1,6 @@
-# 阶段二：生产级深度学习方案设计
+# 阶段二：生产级深度学习方案设计 / Stage 2: Production Deep-Learning Design
+
+**语言 / Language：** 中文（下文） · [English](#english-version)
 
 ## 1. 架构选择
 
@@ -100,3 +102,108 @@ dets = predict_with_sahi("leaf.jpg", "best.pt", tile=640, overlap=0.2, conf=0.25
 * 导出：`model.export(format="onnx", imgsz=640)`，配合内置 `SlicedPredictor` 可以脱离 PyTorch 推理；
 * 批量显微图：先按放大倍率分组，不同倍率分别训练或统一重采样到相同 µm/px 后再切片（这是按物理尺度归一化，不是粗暴缩小）；
 * 质量控制：把阶段一与阶段二的计数差异 > 20% 的图像列入人工复核队列。
+
+---
+
+# English version
+
+## 1. Architecture
+
+### 1.1 Detection vs density estimation
+
+| Aspect | Small-object detection (YOLOv8/v11 + P2) | Point-supervised density estimation (CSRNet / FIDTM) |
+|---|---|---|
+| Output | a box per stoma → centre (x, y) and size | a density map → integrate for the count; FIDTM can take local maxima as points |
+| Major-axis diameter | converted directly from the box; the OBB version also gives orientation | not available directly; needs a separate segmentation |
+| Labels | points + a typical size can be converted to boxes automatically (see `stomata/dl/dataset.py`) | points only |
+| Suitable density | low to medium, separable boundaries | very high density, heavy occlusion (crowds, bacterial colonies) |
+| Inference | real-time, mature ecosystem (Ultralytics, SAHI, ONNX/TensorRT) | slower, fewer tools |
+
+This task needs **per-object coordinates + major axis**, and stomata are mostly separable with only local touching, so the **detection route** is recommended.
+FIDTM is only a fallback: consider it for very high density when only totals matter and detector recall has clearly saturated.
+
+### 1.2 Why a P2 detection head
+
+YOLOv8 outputs P3/P4/P5 by default (stride 8/16/32). A 35 px stoma covers only about 4×4 cells on P3,
+and a 20 px small stoma only about 2.5×2.5, which hurts both positive-sample assignment and localisation.
+`yolov8{n,s,m}-p2.yaml` adds a stride-4 P2 output, doubling the feature-map resolution for small objects:
+
+```python
+from ultralytics import YOLO
+model = YOLO("yolov8s-p2.yaml").load("yolov8s.pt")   # P2 architecture; shape-matching layers get COCO weights
+```
+
+The cost is more memory and compute; with CPU only or little GPU memory, use `yolov8n-p2`. YOLO11 currently has no
+official P2 config, but a P2 head can be added following the v8-p2 head.
+
+### 1.3 Rotated boxes (optional)
+
+To regress **orientation + major/minor axes** directly, switch to `yolov8s-obb.yaml` (Ultralytics OBB task) with
+rotated-box labels. Stage 1's `angle_deg / major_px / minor_px` can generate rotated-box pre-labels directly.
+
+---
+
+## 2. SAHI: slicing aided inference
+
+### 2.1 Problem
+Scaling a 2000×1500 image down to 640 shrinks it by about 1/3: a 35 px stoma becomes 11 px and the central slit
+(2–3 px) disappears. The input must stay at original resolution.
+
+### 2.2 Mechanism
+1. **Slicing**: sliding 640×640 windows with 20% overlap (`iter_tiles`: the last row/column is aligned to the border so the whole image is covered);
+2. **Per-tile inference**: every tile is at original resolution, so stomata appear at the same scale as in training;
+3. **Coordinate mapping**: adding the tile offset (x0, y0) to each prediction gives full-image coordinates;
+4. **Merging**:
+   * overlapping areas of neighbouring tiles each report the same stoma → duplicates must be removed;
+   * a tile border cuts a stoma into a "half box" whose **IoU with the complete box in the neighbouring tile may be only 0.4–0.5**, while
+     **IoS = intersection / smaller box area ≈ 1** → `postprocess_match_metric="IOS"` is more reliable;
+   * `GREEDYNMM` (non-maximum **merging**) fuses duplicates into one enclosing box, which is more stable than NMS discarding them;
+   * this repository's `SlicedPredictor(merge="center")` adds a **centre-ownership** rule: each tile keeps only boxes whose centre lies in
+     its "core" (each overlap with a neighbour split in half). The cores tile the image without gaps or overlaps, so in theory every
+     object is counted once, with a global IoS-NMS as a safety net (see `tests/test_dl_utils.py`).
+5. **Margin exclusion**: after inference, boxes touching the original image border are removed (`dl_pipeline.py predict --margin-exclusion`).
+
+```python
+from stomata.dl.sliced_inference import predict_with_sahi
+dets = predict_with_sahi("leaf.jpg", "best.pt", tile=640, overlap=0.2, conf=0.25,
+                         postprocess="GREEDYNMM", match_metric="IOS", match_threshold=0.5)
+```
+
+Training and inference must use the same tile size (640, original resolution), otherwise the scale distributions will not match.
+
+### 2.3 Measured comparison
+
+See [`SAHI_COMPARISON.md`](SAHI_COMPARISON.md) for the controlled experiment (v2 model, 57 validation images).
+
+- Built-in `SlicedPredictor`: F1 0.9410, count error 6.60%, 1.3 s per image.
+- SAHI GREEDYNMM + IOS: F1 0.9405, count error 6.77%, 1.4 s per image. Per-image paired comparison shows no significant difference.
+- SAHI NMS + IOU: F1 only 0.92. The IoU between a truncated half box and the complete box is too low, so NMS cannot remove the duplicates. Note that SAHI silently switches to this mode at low model thresholds; `predict_with_sahi` now forces the specified merge type.
+
+The built-in slicer is therefore the default.
+
+Multi-scale TTA (1.0× + 1.25× fusion, [`TTA_COMPARISON.md`](TTA_COMPARISON.md)) raised recall of < 40 px stomata by 2.5–3.3 percentage points, but overall F1 did not improve (best 0.9409 vs baseline 0.9410) while inference time per image grew by about 1.5×, so it is not enabled by default either.
+
+---
+
+## 3. Training recipe (few-shot)
+
+| Item | Value | Reason |
+|---|---|---|
+| Model | yolov8s-p2 + COCO pre-training | small-object friendly; the s size does not overfit easily on little data |
+| Freezing | `freeze=10` (backbone) | converges with 20–50 tiles; unfreeze for full fine-tuning once there is more data |
+| Input | 640 tiles at original resolution | see §2 |
+| Geometric augmentation | `degrees=180, flipud=0.5, fliplr=0.5, mosaic=1.0, scale=0.25` | stomata have arbitrary orientation and are symmetric |
+| Colour augmentation | `hsv_h=0, hsv_s=0, hsv_v=0.3` | grey images; only brightness / uneven illumination is simulated |
+| Negatives | about 30% empty tiles | veins and blank areas are the main false-positive sources |
+| Split | train/validation split **by whole image** | overlapping tiles of one image on both sides would leak into validation |
+| Early stopping | `patience=50`, `close_mosaic=20` | mosaic off in the last 20 epochs to match the real distribution |
+
+Evaluate with this repository's `stomata.evaluation` (point-matching P/R/F1) on **independent whole images**, not just mAP:
+counting cares about TP/FP/FN after one-to-one matching.
+
+---
+
+## 4. Deployment
+* Export: `model.export(format="onnx", imgsz=640)`; together with the built-in `SlicedPredictor`, inference can run without PyTorch;
+* Batches of micrographs: group by magnification first, and either train separately per magnification or resample to the same µm/px before tiling (this is normalisation by physical scale, not crude downscaling);
+* Quality control: send images whose stage-1 and stage-2 counts differ by more than 20% to a manual review queue.

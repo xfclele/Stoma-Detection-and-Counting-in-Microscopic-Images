@@ -1,4 +1,6 @@
-# stomata_yolov8n_p2_human — 人工标注微调模型（v1，已被 v2 取代）
+# stomata_yolov8n_p2_human — 人工标注微调模型（v1，已被 v2 取代） / model fine-tuned on human labels (v1, superseded by v2)
+
+**语言 / Language：** 中文（下文） · [English](#english-version)
 
 | 项目 | 内容 |
 |---|---|
@@ -17,6 +19,32 @@
 阈值与模型都在该验证集上选择，数字略偏乐观。详细分析见 [`docs/TRAINING_REPORT.md`](../../docs/TRAINING_REPORT.md)。
 
 ## 使用
+
+```bash
+python scripts/dl_pipeline.py predict images/ --weights models/stomata_yolov8n_p2_human/best.pt --no-sahi --conf 0.45 -o outputs_dl
+```
+
+---
+
+# English version
+
+| Item | Value |
+|---|---|
+| Architecture | YOLOv8n-P2 (stride-4 small-object head), 2.9 M parameters |
+| Initialisation | `models/stomata_yolov8n_p2/best.pt` (pseudo-label pre-training) |
+| Training data | human-labelled `Stomata_Enhanced`: 126 images of 2560×1920 → 1,512 tiles of 640 (incompletely labelled `108.1_1` and `349.3` removed) |
+| Training | CPU, three segments with 18 epochs in total (ft1 → ft2 → ft3); these weights are the best epoch of ft3; per-epoch metrics in `results_all_runs.csv` |
+| Recommended threshold | **conf = 0.45** (best F1 on validation) |
+
+## Metrics (57 human-labelled validation images, whole-image sliced inference)
+
+| Precision | Recall | F1 | Count MAPE | Count bias |
+|---|---|---|---|---|
+| 0.935 | 0.944 | 0.939 | 6.8% | +3.1 per image |
+
+Both threshold and model were selected on this validation set, so the numbers are slightly optimistic. Detailed analysis: [`docs/TRAINING_REPORT.md`](../../docs/TRAINING_REPORT.md).
+
+## Usage
 
 ```bash
 python scripts/dl_pipeline.py predict images/ --weights models/stomata_yolov8n_p2_human/best.pt --no-sahi --conf 0.45 -o outputs_dl
